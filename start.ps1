@@ -17,11 +17,13 @@ if (-not (Get-Process -Name ollama -ErrorAction SilentlyContinue)) {
   $ollamaProcess = Start-Process -FilePath $ollamaExe -ArgumentList 'serve' -WindowStyle Hidden -PassThru
   Set-Content -LiteralPath (Join-Path $projectRoot '.ollama.pid') -Value $ollamaProcess.Id
 }
-$backendProcess = Start-Process -FilePath $pythonExe -ArgumentList '-m','uvicorn','app.main:app','--host','127.0.0.1','--port','8000' -WorkingDirectory $backendRoot -WindowStyle Hidden -PassThru
-$frontendProcess = Start-Process -FilePath 'npm.cmd' -ArgumentList 'run','dev' -WorkingDirectory $frontendRoot -WindowStyle Hidden -PassThru
-Set-Content -LiteralPath (Join-Path $projectRoot '.backend.pid') -Value $backendProcess.Id
-Set-Content -LiteralPath (Join-Path $projectRoot '.frontend.pid') -Value $frontendProcess.Id
+Start-Process -FilePath $pythonExe -ArgumentList '-m','uvicorn','app.main:app','--host','127.0.0.1','--port','8000' -WorkingDirectory $backendRoot -WindowStyle Hidden | Out-Null
+Start-Process -FilePath 'npm.cmd' -ArgumentList 'run','dev' -WorkingDirectory $frontendRoot -WindowStyle Hidden | Out-Null
 Start-Sleep -Seconds 3
+$backendProcessId = (Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction Stop | Select-Object -First 1).OwningProcess
+$frontendProcessId = (Get-NetTCPConnection -LocalPort 5173 -State Listen -ErrorAction Stop | Select-Object -First 1).OwningProcess
+Set-Content -LiteralPath (Join-Path $projectRoot '.backend.pid') -Value $backendProcessId
+Set-Content -LiteralPath (Join-Path $projectRoot '.frontend.pid') -Value $frontendProcessId
 if (-not $NoBrowser) {
   Start-Process 'http://127.0.0.1:5173'
 }
