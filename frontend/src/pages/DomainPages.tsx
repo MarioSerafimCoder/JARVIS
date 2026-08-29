@@ -3,11 +3,12 @@ import { Activity, Brain, Check, Clock3, Download, ListTodo, Plus, SlidersHorizo
 import { api, jsonRequest } from '../services/api'
 import type { ActivityItem, ContextEvidence, DocumentItem, Memory, Page, Task, ToolAction } from '../types'
 import { Badge, Card, Empty, PageFrame, Row, formatDate, useLoad } from '../components/Common'
+import { CoreHome } from '../components/cognitive/CognitiveCore'
 
 export function NowPage({ go }: { go: (page: Page) => void }) {
   const [tasks] = useLoad<Task[]>('/tasks', []); const [actions] = useLoad<ToolAction[]>('/tools/pending', []); const [activity] = useLoad<ActivityItem[]>('/activity', []); const [memories] = useLoad<Memory[]>('/memory', [])
   const date = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'full', timeStyle: 'short' }).format(new Date())
-  return <PageFrame eyebrow="Seu sistema pessoal" title="Agora" subtitle={date}><div className="hero"><div><span className="eyebrow">O QUE MERECE ATENÇÃO</span><h2>{tasks.some(item => !['done','cancelled'].includes(item.status)) ? 'Há itens esperando por você.' : 'Tudo sob controle por enquanto.'}</h2></div><button className="primary" onClick={() => go('chat')}><Sparkles/>Conversar com Jarvis</button></div><div className="grid two">
+  return <PageFrame eyebrow="Seu sistema pessoal" title="Agora" subtitle={date}><div className="hero"><div><span className="eyebrow">O QUE MERECE ATENÇÃO</span><h2>{tasks.some(item => !['done','cancelled'].includes(item.status)) ? 'Há itens esperando por você.' : 'Tudo sob controle por enquanto.'}</h2></div><button className="primary" onClick={() => go('chat')}><Sparkles/>Conversar com Jarvis</button></div><CoreHome go={go}/><div className="grid two">
     <Card title="Tarefas prioritárias" icon={<ListTodo/>}>{tasks.some(item => item.status !== 'done') ? tasks.filter(item => item.status !== 'done').slice(0,5).map(item => <Row key={item.id} title={item.title} meta={`${item.priority} · ${item.status}`}/>) : <Empty title="Nada pendente" body="Tarefas reais aparecerão aqui."/>}</Card>
     <Card title="Aguardando confirmação" icon={<Clock3/>}>{actions.length ? actions.map(item => <Row key={item.action_id} title={item.tool} meta="Ação apenas proposta"/>) : <Empty title="Nenhuma ação pendente" body="O Jarvis pedirá sua autorização antes de escrever dados."/>}</Card>
     <Card title="Atividade recente" icon={<Activity/>}>{activity.length ? activity.slice(0,5).map(item => <Row key={item.id} title={item.tool} meta={item.status}/>) : <Empty title="Sem atividade" body="Execuções verificadas serão registradas aqui."/>}</Card>

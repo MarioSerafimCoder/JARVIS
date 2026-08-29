@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 
-export type Page = 'now' | 'chat' | 'memory' | 'library' | 'tasks' | 'calendar' | 'automations' | 'connections' | 'persona' | 'devices' | 'activity' | 'usage' | 'settings'
+export type Page = 'now' | 'core' | 'chat' | 'memory' | 'library' | 'tasks' | 'calendar' | 'automations' | 'connections' | 'persona' | 'devices' | 'activity' | 'usage' | 'settings'
 export type NavItem = [Page, string, ReactNode]
 
 export interface Conversation { id: string; title: string; created_at: string; updated_at: string }
@@ -16,3 +16,13 @@ export interface SearchItem { type: string; id: string; title: string; subtitle?
 export interface Health { status: string; llm: { status?: string; model?: string; error?: string } }
 export interface ChatResult { conversation_id: string; message: string; context: ContextEvidence; actions: ToolAction[] }
 export interface StreamEvent { type: 'start' | 'token' | 'action' | 'done' | 'error'; conversation_id?: string; content?: string; message?: string; context?: ContextEvidence; action?: ToolAction; actions?: ToolAction[]; error?: { code: string; message: string } }
+
+export type CognitiveState = 'IDLE' | 'THINKING' | 'SEARCHING_MEMORY' | 'SEARCHING_KNOWLEDGE' | 'USING_TOOL' | 'WAITING_CONFIRMATION' | 'ERROR' | 'LISTENING' | 'SPEAKING'
+export type CognitiveNodeKind = 'core' | 'memory' | 'document' | 'task' | 'tool'
+export type CognitiveQuality = 'AUTO' | 'HIGH' | 'MEDIUM' | 'LOW'
+export interface CognitivePosition { x: number; y: number; z: number }
+export interface CognitiveNode { id: string; entity_id?: string; kind: CognitiveNodeKind; cluster: string; label: string; position: CognitivePosition; size: number; intensity: number; metadata: Record<string, unknown> }
+export interface CognitiveEdge { source: string; target: string; type: string; weight: number; evidence: { reason?: string; shared_terms?: string[]; same_category?: boolean; same_source?: boolean } }
+export interface CognitiveCluster { id: string; center: CognitivePosition; count: number }
+export interface CognitiveGraph { nodes: CognitiveNode[]; edges: CognitiveEdge[]; clusters: CognitiveCluster[]; state: { state: CognitiveState; last_event_id: number }; stats: { nodes: number; edges: number; memories: number; documents: number; tasks: number; tools: number; relationship_provider: string } }
+export interface CognitiveEvent { id: number; type: string; timestamp?: string; state: CognitiveState; payload: { node_id?: string; node_ids?: string[]; reason?: string; entity_id?: string; [key: string]: unknown } }
