@@ -20,6 +20,10 @@ MEMÓRIA · TAREFAS · DOCUMENTOS   LLMProvider
                       POLICY / CONFIRMATION / EXECUTOR
                                    ↓
                        RESULTADO REAL + ACTIVITY LOG
+
+COGNITIVE GRAPH SERVICE ← SQLITE + TOOL REGISTRY
+          ↓                         ↑ eventos reais
+THREE.JS / FALLBACK 2D ← SSE ← COGNITIVE STATE SERVICE
 ```
 
 O frontend nunca acessa o SQLite diretamente. `AgentController` orquestra persona, contexto, modelo e ferramentas. `ContextBuilder` seleciona apenas mensagens recentes, memórias relevantes, trechos FTS5 e tarefas relacionadas; o banco inteiro não é enviado ao modelo.
@@ -33,3 +37,5 @@ O estado de uma ação de escrita percorre `pending_confirmation → executing �
 Conversa, memória e biblioteca são domínios separados. Conversa é cronologia, memória é informação estruturada e biblioteca contém documentos externos com trechos pesquisáveis via SQLite FTS5.
 
 Voz, integrações, calendários, automações, mobile e ESP32 usam contratos ou páginas estruturais, mas não são declarados funcionais nesta versão.
+
+O Cognitive Core é um consumidor adicional e não substitui os domínios existentes. O grafo usa layout determinístico, relações computáveis e limite de grau. O `CognitiveStateService` é agnóstico à UI e transmite somente estado operacional e ids de entidades, nunca chain-of-thought.

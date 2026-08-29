@@ -20,6 +20,7 @@ A Fase 1.5 consolida o Jarvis como aplicativo local utilizável, testado e empac
 - CRUD visual de conversas, memórias e tarefas, exclusão de documentos, filtros, auditoria detalhada e backup;
 - frontend modular e tipado, sem `Record<string, any>`;
 - executável Windows onedir, com interface e servidor local no mesmo pacote.
+- Cognitive Core 3D com grafo real, eventos cognitivos, layout estável, relações justificadas e fallback acessível.
 
 ## Segurança e privacidade
 
@@ -32,8 +33,8 @@ A Fase 1.5 consolida o Jarvis como aplicativo local utilizável, testado e empac
 
 ## Validação
 
-- backend: 21 testes aprovados;
-- frontend: 6 testes de componentes/cliente aprovados;
+- backend: 27 testes aprovados;
+- frontend: 10 testes de componentes/cliente aprovados;
 - TypeScript e build Vite aprovados, com 1.674 módulos transformados;
 - executável validado em execução real: interface HTTP 200, `/api/health` saudável e modelo disponível;
 - streaming real validado no navegador com resposta do `qwen3.5:4b`;

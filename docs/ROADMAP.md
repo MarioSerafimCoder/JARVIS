@@ -2,6 +2,7 @@
 
 - **Fase 1 - cérebro local (concluída):** Qwen/Ollama, streaming cancelável, conversa, persona, memória, ferramentas confirmáveis, tarefas, auditoria, CRUD e interface empacotada para Windows.
 - **Fase 1.5 - consolidação (concluída):** retrievers modulares, FTS5 com localização, orçamento e inspeção de contexto, defesa contra instruções em documentos, erros normalizados, migrações simples, backup e testes com FakeLLM/React.
+- **Fase 1.6 - Cognitive Core (concluída):** grafo cognitivo 3D baseado em dados reais, relações determinísticas e coocorrência limitada, estados/eventos SSE, mapa expandido, seleção, busca, filtros, LOD e fallback 2D.
 - **Fase 2 - knowledge system:** melhorar parsing, RAG, citações por localização e embeddings locais opcionais. FTS5 já funciona; embeddings e OCR não existem.
 - **Fase 3 - executive system:** prioridades, planejamento, lembretes e agenda real.
 - **Fase 4 - personality engine:** editor estruturado completo, feedback e estados pessoais.

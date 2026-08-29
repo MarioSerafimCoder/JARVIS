@@ -12,10 +12,11 @@ Jarvis Local é a fundação de um sistema operacional pessoal de IA: conversa e
 - recuperação modular de histórico, memórias, tarefas e documentos com orçamento de contexto e localização da fonte;
 - interface React responsiva com Agora, Jarvis, Memória, Biblioteca, Tarefas, Personalidade, Atividade, Uso, Configurações e páginas estruturais;
 - CRUD visual de conversas, memória e tarefas, Context Inspector 2.0 e command palette com `Ctrl+K`;
+- Cognitive Core 3D baseado em dados reais, com estados do agente, relações justificadas, modo expandido e fallback 2D;
 - backup consistente do banco e dos arquivos em ZIP;
 - exportação local em JSON pelo endpoint `/api/export`.
 
-O briefing completo é maior que este primeiro incremento. Consulte [ROADMAP.md](docs/ROADMAP.md) para a separação entre implementado e planejado.
+Consulte [COGNITIVE_CORE.md](docs/COGNITIVE_CORE.md) para o modelo visual e [ROADMAP.md](docs/ROADMAP.md) para a separação entre implementado e planejado.
 
 ## Iniciar
 
