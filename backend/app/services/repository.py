@@ -24,11 +24,11 @@ class Repository:
         self.execute("INSERT INTO conversations VALUES (?,?,?,?)", (item_id, title, now, now))
         return self.row("SELECT * FROM conversations WHERE id=?", (item_id,)) or {}
 
-    def add_message(self, conversation_id: str, role: str, content: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
+    def add_message(self, conversation_id: str, role: str, content: str, context: dict[str, Any] | None = None, generation_status: str = "complete") -> dict[str, Any]:
         item_id, now = str(uuid.uuid4()), utc_now()
         self.execute(
-            "INSERT INTO messages VALUES (?,?,?,?,?,?)",
-            (item_id, conversation_id, role, content, json.dumps(context or {}, ensure_ascii=False), now),
+            "INSERT INTO messages (id,conversation_id,role,content,context_json,created_at,generation_status) VALUES (?,?,?,?,?,?,?)",
+            (item_id, conversation_id, role, content, json.dumps(context or {}, ensure_ascii=False), now, generation_status),
         )
         self.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conversation_id))
         return self.row("SELECT * FROM messages WHERE id=?", (item_id,)) or {}
@@ -47,4 +47,3 @@ class Repository:
 
 
 repository = Repository()
-

@@ -8,13 +8,28 @@ Jarvis Local é a fundação de um sistema operacional pessoal de IA: conversa e
 - API FastAPI com SQLite, histórico de conversas, memória, tarefas, notas, biblioteca e auditoria;
 - busca de documentos PDF, DOCX, TXT e MD usando FTS5, sem cloud;
 - ferramentas SAFE e CONFIRM; ferramentas arbitrárias/perigosas não são expostas ao modelo;
+- streaming de respostas por SSE, com interrupção pelo usuário e persistência marcada como cancelada;
+- recuperação modular de histórico, memórias, tarefas e documentos com orçamento de contexto e localização da fonte;
 - interface React responsiva com Agora, Jarvis, Memória, Biblioteca, Tarefas, Personalidade, Atividade, Uso, Configurações e páginas estruturais;
-- Context Inspector e command palette com `Ctrl+K`;
+- CRUD visual de conversas, memória e tarefas, Context Inspector 2.0 e command palette com `Ctrl+K`;
+- backup consistente do banco e dos arquivos em ZIP;
 - exportação local em JSON pelo endpoint `/api/export`.
 
 O briefing completo é maior que este primeiro incremento. Consulte [ROADMAP.md](docs/ROADMAP.md) para a separação entre implementado e planejado.
 
 ## Iniciar
+
+### Executável para Windows
+
+Baixe ou extraia `release/JarvisLocal-Windows.zip` e abra `app/JarvisLocal/JarvisLocal.exe`. A interface abre em [http://127.0.0.1:8765](http://127.0.0.1:8765). O Ollama e o modelo `qwen3.5:4b` precisam estar instalados; o arquivo `LEIA-ME.txt` acompanha o pacote.
+
+Para gerar novamente o pacote:
+
+```powershell
+.\build_executable.ps1
+```
+
+### Ambiente de desenvolvimento
 
 Abra o PowerShell nesta pasta e execute:
 
@@ -56,7 +71,7 @@ npm run dev
 
 Os dados ficam em `data/`: banco em `data/database/jarvis.db`, documentos em `data/library/` e notas em `data/notes/`. Essa pasta, `.env` e logs privados estão ignorados pelo Git. Não há telemetria, analytics ou upload automático.
 
-Para backup, pare o Jarvis e copie a pasta `data/`. Para restaurar, recoloque a cópia no mesmo caminho antes de iniciar. O endpoint `GET /api/export` fornece uma exportação JSON lógica.
+Use **Configurações → Criar backup local** para gerar um ZIP consistente em `backups/`. Para restaurar manualmente, pare o Jarvis e recoloque os arquivos da cópia nos mesmos caminhos. O endpoint `GET /api/export` fornece uma exportação JSON lógica.
 
 Para apagar todos os dados, pare o Jarvis e remova manualmente a pasta `data/`. Essa operação é irreversível; o projeto não a automatiza.
 
@@ -80,10 +95,10 @@ cd backend
 .\.venv\Scripts\python.exe -m pytest
 
 cd ..\frontend
+npm test
 npm run build
 ```
 
 ## Desinstalação
 
 Pare o Jarvis, desinstale Ollama nas Configurações do Windows se não quiser mais usá-lo e então remova esta pasta. Os modelos locais do Ollama são gerenciados pelo próprio Ollama.
-

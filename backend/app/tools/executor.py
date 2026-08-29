@@ -26,23 +26,25 @@ class ToolExecutor:
         if tool.risk_level == RiskLevel.CONFIRM:
             action_id = str(uuid.uuid4())
             repository.execute(
-                "INSERT INTO pending_actions VALUES (?,?,?,?,?,?,?)",
-                (action_id, name, json.dumps(payload, ensure_ascii=False), "pending", conversation_id, utc_now(), None),
+                "INSERT INTO pending_actions (id,tool,input_json,status,conversation_id,created_at,resolved_at,executed_at) VALUES (?,?,?,?,?,?,?,?)",
+                (action_id, name, json.dumps(payload, ensure_ascii=False), "pending_confirmation", conversation_id, utc_now(), None, None),
             )
             return {"status": "pending_confirmation", "action_id": action_id, "tool": name, "input": payload}
         return self._execute(tool.name, payload, conversation_id)
 
     def confirm(self, action_id: str, approved: bool) -> dict[str, Any]:
         action = repository.row("SELECT * FROM pending_actions WHERE id=?", (action_id,))
-        if not action or action["status"] != "pending":
+        if not action or action["status"] != "pending_confirmation":
             raise ValueError("Ação pendente não encontrada.")
         if not approved:
             result = {"status": "cancelled", "action_id": action_id}
             repository.execute("UPDATE pending_actions SET status='cancelled', resolved_at=? WHERE id=?", (utc_now(), action_id))
             repository.audit(action["tool"], json.loads(action["input_json"]), result, "cancelled", action["conversation_id"])
             return result
+        repository.execute("UPDATE pending_actions SET status='executing' WHERE id=?", (action_id,))
         result = self._execute(action["tool"], json.loads(action["input_json"]), action["conversation_id"])
-        repository.execute("UPDATE pending_actions SET status=?, resolved_at=? WHERE id=?", (result["status"], utc_now(), action_id))
+        now = utc_now()
+        repository.execute("UPDATE pending_actions SET status=?, resolved_at=?, executed_at=? WHERE id=?", (result["status"], now, now, action_id))
         return {**result, "action_id": action_id}
 
     def _execute(self, name: str, payload: dict[str, Any], conversation_id: str | None) -> dict[str, Any]:
@@ -56,4 +58,3 @@ class ToolExecutor:
             result = {"status": "failed", "error": str(exc)}
             repository.audit(name, payload, result, "failed", conversation_id)
             return result
-

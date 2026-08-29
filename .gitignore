@@ -3,6 +3,8 @@
 backend/.venv/
 frontend/node_modules/
 frontend/dist/
+backend/frontend/
+release/
 frontend/*.tsbuildinfo
 frontend/vite.config.js
 frontend/vite.config.d.ts

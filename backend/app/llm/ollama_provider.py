@@ -35,21 +35,22 @@ class OllamaProvider(LLMProvider):
             response.raise_for_status()
             return response.json()
 
-    async def stream_chat(self, messages: list[dict[str, Any]]) -> AsyncIterator[str]:
-        payload = {
+    async def stream_chat(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> AsyncIterator[dict[str, Any]]:
+        payload: dict[str, Any] = {
             "model": self.settings.model_name,
             "messages": messages,
             "stream": True,
             "think": False,
             "options": self._options(),
         }
+        if tools:
+            payload["tools"] = tools
         async with httpx.AsyncClient(timeout=180) as client:
             async with client.stream("POST", f"{self.settings.ollama_url}/api/chat", json=payload) as response:
                 response.raise_for_status()
                 async for line in response.aiter_lines():
                     if line:
-                        data = json.loads(line)
-                        yield data.get("message", {}).get("content", "")
+                        yield json.loads(line)
 
     async def health(self) -> dict[str, Any]:
         try:
@@ -69,4 +70,3 @@ class OllamaProvider(LLMProvider):
             response.raise_for_status()
             data = response.json()
             return {"name": self.settings.model_name, "details": data.get("details", {}), "model_info": data.get("model_info", {})}
-

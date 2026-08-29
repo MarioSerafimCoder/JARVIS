@@ -1,99 +1,51 @@
-# Relatório da implementação inicial
+# Relatório de consolidação do cérebro local
 
 Data: 29/08/2026
 
-## Hardware e ambiente
+## Resultado
 
-- CPU: Intel Core i5-9400F, 6 núcleos / 6 threads.
-- RAM: 31,94 GB.
-- GPU: NVIDIA GeForce RTX 5050, 8.151 MiB de VRAM.
-- Windows 11 Pro build 26200; driver NVIDIA 610.88; CUDA UMD 13.3.
-- Python 3.12.5, Node 24.18.0, npm 11.16.0, Git 2.55.0 e Ollama 0.33.2.
+A Fase 1.5 consolida o Jarvis como aplicativo local utilizável, testado e empacotado para Windows. A IA permanece no computador, usa `qwen3.5:4b` pelo Ollama e não depende de API paga.
 
-## Modelo e performance
+## Entregas principais
 
-- `qwen3.5:4b`, 4,7B parâmetros, Q4_K_M, 3,4 GB.
-- Execução confirmada como 100% GPU pelo Ollama.
-- Aproximadamente 3,8 GB de VRAM durante inferência.
-- Primeira carga: 51,05 s; geração medida: 70,41 tokens/s.
-- Resposta aquecida pelo endpoint real do Jarvis: 5,73 s.
-- O provider desliga `thinking` em conversas normais e limita a saída, evitando os 4.603 tokens gerados pelo primeiro benchmark bruto.
+- streaming de chat via SSE, atualização incremental, botão de parar, nova tentativa, cópia e timestamps;
+- persistência de resposta parcial como `cancelled` quando a geração é interrompida;
+- confirmação de ferramentas com estados explícitos e resposta final do modelo baseada no resultado executado;
+- `ConversationContextRetriever`, `MemoryRetriever`, `KnowledgeRetriever` e `TaskContextRetriever` coordenados pelo `ContextBuilder`;
+- ranking FTS5 leve, orçamento configurável de contexto e atualização seletiva de `last_used_at`;
+- aviso de conteúdo não confiável para impedir que instruções encontradas em documentos sejam tratadas como comandos;
+- localização de evidências por página de PDF, parágrafo de DOCX e linhas de TXT/Markdown;
+- APIs separadas de chat, conversas, ferramentas, backup e domínios;
+- migrações aditivas simples e versão de esquema no SQLite;
+- CRUD visual de conversas, memórias e tarefas, exclusão de documentos, filtros, auditoria detalhada e backup;
+- frontend modular e tipado, sem `Record<string, any>`;
+- executável Windows onedir, com interface e servidor local no mesmo pacote.
 
-## Backend implementado
+## Segurança e privacidade
 
-- FastAPI, configuração central, CORS restrito ao frontend local e SQLite em WAL.
-- `LLMProvider`, `OllamaProvider`, `LLMRegistry`, `AgentController` e `ContextBuilder`.
-- Conversas e mensagens persistentes.
-- Memória estruturada e separada do histórico.
-- Notas, tarefas, biblioteca de documentos, FTS5, auditoria e uso.
-- Endpoints organizados para chat, conversas, memória, biblioteca, tarefas, tools, atividade, persona, sistema, uso, integrações, dispositivos, busca e exportação.
+- binding exclusivo em localhost;
+- nenhuma telemetria ou integração externa ativada;
+- o modelo não recebe shell nem caminho arbitrário;
+- uploads limitados e armazenados com nome interno seguro;
+- ferramentas desconhecidas ou perigosas permanecem bloqueadas;
+- dados, persona, biblioteca e backups persistem ao lado do executável.
 
-## Frontend implementado
+## Validação
 
-- React, TypeScript, Vite, Tailwind CSS e Lucide.
-- Telas funcionais: Agora, Jarvis, Memória, Biblioteca, Tarefas, Personalidade, Atividade, Uso, Dispositivos e Configurações.
-- Telas estruturais com estados honestos: Agenda, Automações e Conexões.
-- Context Inspector, confirmação visual, busca global e command palette `Ctrl+K`.
-- Responsividade validada em desktop e viewport 390×844.
+- backend: 21 testes aprovados;
+- frontend: 6 testes de componentes/cliente aprovados;
+- TypeScript e build Vite aprovados, com 1.674 módulos transformados;
+- executável validado em execução real: interface HTTP 200, `/api/health` saudável e modelo disponível;
+- streaming real validado no navegador com resposta do `qwen3.5:4b`;
+- pacote final: `release/JarvisLocal-Windows.zip`, aproximadamente 41,11 MB.
 
-## Banco
+## Funcionalidades deliberadamente fora do escopo
 
-Tabelas: `conversations`, `messages`, `memories`, `memories_fts`, `notes`, `tasks`, `documents`, `document_chunks`, `document_chunks_fts`, `pending_actions`, `activity_log`, `usage_events` e `devices`.
+Voz, wake word, calendários reais, automações, OAuth, Google/Microsoft/GitHub/Home Assistant, mobile, ESP32-S3, OCR, embeddings, banco vetorial e providers pagos continuam reservados para fases futuras.
 
-## Ferramentas reais
+## Limitações conhecidas
 
-- SAFE: `get_current_datetime`, `get_system_info`, `read_note`, `list_notes`, `search_memory`, `list_memories`, `list_tasks`, `search_documents`.
-- CONFIRM: `create_note`, `save_memory`, `delete_memory`, `create_task`, `update_task`, `complete_task`.
-- Ferramentas desconhecidas e DANGEROUS são bloqueadas e auditadas.
-
-## Segurança
-
-- O LLM não recebe shell nem caminhos arbitrários.
-- Escritas solicitadas pelo modelo só executam após confirmação explícita.
-- Uploads limitados por extensão e tamanho, nomes internos aleatórios e proteção contra directory traversal.
-- Sem telemetria, analytics, cloud database, API paga ou push remoto.
-
-## Testes executados
-
-- Backend: 16 testes aprovados; zero falhas. Cobrem banco, persistência, documentos, FTS5, políticas SAFE/CONFIRM/DANGEROUS, executor, auditoria e caminhos.
-- Frontend: TypeScript e build de produção aprovados; 1.670 módulos transformados.
-- Smoke test real aprovado: health, memória, tarefa, upload MD, busca FTS5, chat Qwen, proposta de ferramenta, confirmação, persistência e auditoria.
-- Dados artificiais do smoke test não estão no banco ativo.
-
-## Funcionalidades preparadas, não funcionais
-
-Voz, wake word, calendários, lembretes, automações, OAuth, Google/Microsoft/GitHub/Home Assistant, mobile, ESP32-S3, OCR, embeddings, banco vetorial e providers externos.
-
-## Limitações
-
-- Sem streaming visual de tokens e sem botão funcional de parar geração.
-- Editor de persona usa Markdown; o formulário estruturado completo ainda será refinado.
-- Sem autenticação ou criptografia do SQLite; a API deve permanecer em localhost.
-- Parser de documentos roda no processo da API e ainda não tem fila de jobs.
-- Cobertura frontend automatizada e CRUD visual de edição precisam ser ampliados.
-
-## Próximas cinco prioridades
-
-1. Streaming de chat e cancelamento de geração.
-2. Testes de integração do AgentController com respostas simuladas do Ollama e testes de componentes React.
-3. CRUD visual completo de memória, tarefas e conversas.
-4. Processamento assíncrono de biblioteca, citações por página/localização e melhor ranking FTS5.
-5. Editor de personalidade estruturado com campos, presets e prévia lado a lado.
-
-## Comandos
-
-```powershell
-# iniciar tudo
-.\start.ps1
-
-# parar os processos iniciados pelo script
-.\stop.ps1
-
-# checar Ollama e GPU durante inferência
-& "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe" ps
-nvidia-smi
-```
-
-Aplicação: `http://127.0.0.1:5173`  
-API: `http://127.0.0.1:8000/docs`
-
+- o Ollama e o modelo `qwen3.5:4b` precisam estar instalados na máquina;
+- a indexação de documentos ainda ocorre no processo da API, sem fila de jobs;
+- o SQLite não é criptografado; a aplicação deve permanecer restrita ao computador local;
+- a versão atual usa FTS5, sem embeddings ou OCR.

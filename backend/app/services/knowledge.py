@@ -1,5 +1,6 @@
 import re
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 import fitz
@@ -9,14 +10,41 @@ from app.core.database import database, utc_now
 from app.services.repository import repository
 
 
-def extract_text(path: Path, extension: str) -> str:
+@dataclass
+class SourceSegment:
+    content: str
+    location: str
+
+
+def extract_segments(path: Path, extension: str) -> list[SourceSegment]:
     if extension == ".pdf":
         with fitz.open(path) as document:
-            return "\n".join(page.get_text() for page in document)
+            segments: list[SourceSegment] = []
+            for page_number, page in enumerate(document, start=1):
+                for content in chunk_text(page.get_text()):
+                    segments.append(SourceSegment(content, f"Página {page_number}"))
+            return segments
     if extension == ".docx":
         document = DocxDocument(path)
-        return "\n".join(paragraph.text for paragraph in document.paragraphs)
-    return path.read_text(encoding="utf-8", errors="replace")
+        segments = []
+        for index, paragraph in enumerate(document.paragraphs, start=1):
+            content = paragraph.text.strip()
+            if content:
+                style = paragraph.style.name if paragraph.style else "Parágrafo"
+                segments.append(SourceSegment(content, f"Parágrafo {index} ({style})"))
+        return segments
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    segments = []
+    for start in range(0, len(lines), 35):
+        end = min(len(lines), start + 40)
+        content = "\n".join(lines[start:end]).strip()
+        if content:
+            segments.append(SourceSegment(content, f"Linhas {start + 1}-{end}"))
+    return segments
+
+
+def extract_text(path: Path, extension: str) -> str:
+    return "\n".join(segment.content for segment in extract_segments(path, extension))
 
 
 def chunk_text(text: str, size: int = 1200, overlap: int = 160) -> list[str]:
@@ -40,39 +68,40 @@ def chunk_text(text: str, size: int = 1200, overlap: int = 160) -> list[str]:
 
 def index_document(document_id: str, filename: str, path: Path, extension: str) -> dict:
     try:
-        text = extract_text(path, extension)
-        chunks = chunk_text(text)
-        if not chunks:
+        segments = extract_segments(path, extension)
+        if not segments:
             raise ValueError("Este documento parece não possuir texto extraível. OCR será implementado futuramente.")
         with database() as connection:
-            for position, content in enumerate(chunks):
+            for position, segment in enumerate(segments):
                 chunk_id = str(uuid.uuid4())
                 connection.execute(
                     "INSERT INTO document_chunks VALUES (?,?,?,?,?)",
-                    (chunk_id, document_id, content, f"trecho {position + 1}", position),
+                    (chunk_id, document_id, segment.content, segment.location, position),
                 )
                 connection.execute(
                     "INSERT INTO document_chunks_fts VALUES (?,?,?,?)",
-                    (chunk_id, document_id, filename, content),
+                    (chunk_id, document_id, filename, segment.content),
                 )
             connection.execute(
                 "UPDATE documents SET status='ready', chunk_count=?, error=NULL WHERE id=?",
-                (len(chunks), document_id),
+                (len(segments), document_id),
             )
-        return {"status": "ready", "chunk_count": len(chunks)}
+        return {"status": "ready", "chunk_count": len(segments)}
     except Exception as exc:
         repository.execute("UPDATE documents SET status='error', error=? WHERE id=?", (str(exc), document_id))
         return {"status": "error", "error": str(exc)}
 
 
 def search_documents(query: str, limit: int = 5) -> list[dict]:
-    safe_query = " ".join(part for part in re.findall(r"[\wÀ-ÿ]+", query) if len(part) > 1)
-    if not safe_query:
+    tokens = [part.lower() for part in re.findall(r"[\wÀ-ÿ]+", query) if len(part) > 2][:8]
+    if not tokens:
         return []
+    safe_query = " OR ".join(f'"{token}"' for token in tokens)
     try:
         return repository.rows(
-            "SELECT document_id, filename, content AS relevant_text, bm25(document_chunks_fts) AS score "
-            "FROM document_chunks_fts WHERE document_chunks_fts MATCH ? ORDER BY score LIMIT ?",
+            "SELECT f.document_id, f.filename, f.content AS relevant_text, c.location, bm25(document_chunks_fts) AS score "
+            "FROM document_chunks_fts f JOIN document_chunks c ON c.id=f.chunk_id "
+            "WHERE document_chunks_fts MATCH ? ORDER BY score LIMIT ?",
             (safe_query, limit),
         )
     except Exception:

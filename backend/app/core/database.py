@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS conversations (
 CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   role TEXT NOT NULL CHECK(role IN ('user','assistant','tool','system')), content TEXT NOT NULL,
-  context_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL
+  context_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
+  generation_status TEXT NOT NULL DEFAULT 'complete'
 );
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, created_at);
 CREATE TABLE IF NOT EXISTS memories (
@@ -73,7 +74,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS document_chunks_fts USING fts5(
 );
 CREATE TABLE IF NOT EXISTS pending_actions (
   id TEXT PRIMARY KEY, tool TEXT NOT NULL, input_json TEXT NOT NULL, status TEXT NOT NULL,
-  conversation_id TEXT, created_at TEXT NOT NULL, resolved_at TEXT
+  conversation_id TEXT, created_at TEXT NOT NULL, resolved_at TEXT, executed_at TEXT
 );
 CREATE TABLE IF NOT EXISTS activity_log (
   id TEXT PRIMARY KEY, timestamp TEXT NOT NULL, tool TEXT NOT NULL, input_json TEXT NOT NULL,
@@ -87,10 +88,28 @@ CREATE TABLE IF NOT EXISTS devices (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL, status TEXT NOT NULL,
   last_seen TEXT, capabilities TEXT NOT NULL DEFAULT '[]'
 );
+CREATE TABLE IF NOT EXISTS schema_version (
+  version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL, description TEXT NOT NULL
+);
 """
 
 
 def initialize_database(path: Path | None = None) -> None:
     with database(path) as connection:
         connection.executescript(SCHEMA)
+        _add_column(connection, "messages", "generation_status", "TEXT NOT NULL DEFAULT 'complete'")
+        _add_column(connection, "pending_actions", "executed_at", "TEXT")
+        connection.execute(
+            "INSERT OR IGNORE INTO schema_version VALUES (?,?,?)",
+            (1, utc_now(), "initial schema"),
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO schema_version VALUES (?,?,?)",
+            (2, utc_now(), "streaming status and action execution timestamp"),
+        )
 
+
+def _add_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+    if column not in columns:
+        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")

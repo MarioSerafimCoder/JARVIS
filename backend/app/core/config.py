@@ -1,9 +1,12 @@
 from functools import lru_cache
 from pathlib import Path
+import sys
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", PROJECT_ROOT))
+RUNTIME_ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else PROJECT_ROOT
 
 
 class Settings(BaseSettings):
@@ -16,18 +19,24 @@ class Settings(BaseSettings):
     database_path: Path = Path("data/database/jarvis.db")
     library_path: Path = Path("data/library")
     notes_path: Path = Path("data/notes")
+    backup_path: Path = Path("backups")
+    max_recent_messages: int = 16
+    max_memory_items: int = 6
+    max_document_chunks: int = 5
+    max_context_chars: int = 28000
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     def model_post_init(self, __context: object) -> None:
-        for field_name in ("database_path", "library_path", "notes_path"):
+        for field_name in ("database_path", "library_path", "notes_path", "backup_path"):
             value = getattr(self, field_name)
             if not value.is_absolute():
-                setattr(self, field_name, PROJECT_ROOT / value)
+                setattr(self, field_name, RUNTIME_ROOT / value)
 
     def ensure_directories(self) -> None:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self.library_path.mkdir(parents=True, exist_ok=True)
         self.notes_path.mkdir(parents=True, exist_ok=True)
+        self.backup_path.mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache

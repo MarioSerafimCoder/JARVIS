@@ -1,6 +1,7 @@
 # Roadmap
 
-- **Fase 1 - cérebro local (em andamento):** Qwen/Ollama, conversa, persona, memória, ferramentas, tarefas, auditoria e interface. A vertical funcional inicial foi implementada; streaming, cobertura de testes ampliada e acabamento de CRUD ainda precisam evoluir.
+- **Fase 1 - cérebro local (concluída):** Qwen/Ollama, streaming cancelável, conversa, persona, memória, ferramentas confirmáveis, tarefas, auditoria, CRUD e interface empacotada para Windows.
+- **Fase 1.5 - consolidação (concluída):** retrievers modulares, FTS5 com localização, orçamento e inspeção de contexto, defesa contra instruções em documentos, erros normalizados, migrações simples, backup e testes com FakeLLM/React.
 - **Fase 2 - knowledge system:** melhorar parsing, RAG, citações por localização e embeddings locais opcionais. FTS5 já funciona; embeddings e OCR não existem.
 - **Fase 3 - executive system:** prioridades, planejamento, lembretes e agenda real.
 - **Fase 4 - personality engine:** editor estruturado completo, feedback e estados pessoais.
@@ -12,4 +13,3 @@
 - **Fase 10 - hardware:** ESP32-S3 wearable.
 - **Fase 11 - roteador híbrido:** modelos locais maiores e APIs externas opcionais, nunca obrigatórias.
 - **Fase 12 - aprendizado:** feedback, datasets pessoais e LoRA futuro.
-
