@@ -91,6 +91,15 @@ CREATE TABLE IF NOT EXISTS devices (
 CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL, description TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS memory_relationships (
+  id TEXT PRIMARY KEY, source_memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+  target_memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+  relationship_type TEXT NOT NULL, weight REAL NOT NULL, evidence_json TEXT NOT NULL,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  UNIQUE(source_memory_id, target_memory_id, relationship_type)
+);
+CREATE INDEX IF NOT EXISTS idx_memory_relationships_source ON memory_relationships(source_memory_id);
+CREATE INDEX IF NOT EXISTS idx_memory_relationships_target ON memory_relationships(target_memory_id);
 """
 
 
@@ -106,6 +115,10 @@ def initialize_database(path: Path | None = None) -> None:
         connection.execute(
             "INSERT OR IGNORE INTO schema_version VALUES (?,?,?)",
             (2, utc_now(), "streaming status and action execution timestamp"),
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO schema_version VALUES (?,?,?)",
+            (3, utc_now(), "cognitive core memory relationships"),
         )
 
 

@@ -8,6 +8,7 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from app.container import provider, settings, tool_registry
+from app.core.cognitive_graph import cognitive_graph_service
 from app.core.database import database, utc_now
 from app.core.persona import load_persona, save_persona
 from app.core.security import safe_child_path, validate_upload
@@ -81,6 +82,7 @@ def create_memory(payload: MemoryInput) -> dict:
         connection.execute("INSERT INTO memories_fts VALUES (?,?,?)", (item_id, payload.content, payload.category))
     result = repository.row("SELECT * FROM memories WHERE id=?", (item_id,)) or {}
     repository.audit("manual_save_memory", payload.model_dump(), result, "success")
+    cognitive_graph_service.memory_created(item_id)
     return result
 
 
@@ -95,7 +97,9 @@ def update_memory(memory_id: str, payload: MemoryInput) -> dict:
         )
         connection.execute("DELETE FROM memories_fts WHERE id=?", (memory_id,))
         connection.execute("INSERT INTO memories_fts VALUES (?,?,?)", (memory_id, payload.content, payload.category))
-    return repository.row("SELECT * FROM memories WHERE id=?", (memory_id,)) or {}
+    result = repository.row("SELECT * FROM memories WHERE id=?", (memory_id,)) or {}
+    cognitive_graph_service.graph_changed("memory_updated", memory_id)
+    return result
 
 
 @router.delete("/memory/{memory_id}")
@@ -107,6 +111,7 @@ def delete_memory(memory_id: str) -> dict:
         connection.execute("DELETE FROM memories_fts WHERE id=?", (memory_id,))
     result = {"id": memory_id, "deleted": True}
     repository.audit("manual_delete_memory", {"id": memory_id}, result, "success")
+    cognitive_graph_service.graph_changed("memory_deleted", memory_id)
     return result
 
 
@@ -128,6 +133,7 @@ def create_task(payload: TaskInput) -> dict:
     )
     result = repository.row("SELECT * FROM tasks WHERE id=?", (item_id,)) or {}
     repository.audit("manual_create_task", payload.model_dump(), result, "success")
+    cognitive_graph_service.graph_changed("task_created", item_id)
     return result
 
 
@@ -141,7 +147,9 @@ def update_task(task_id: str, payload: TaskInput) -> dict:
         (payload.title, payload.description, payload.status, payload.priority, utc_now(), payload.due_at,
          completed_at, payload.project, payload.estimated_minutes, task_id),
     )
-    return repository.row("SELECT * FROM tasks WHERE id=?", (task_id,)) or {}
+    result = repository.row("SELECT * FROM tasks WHERE id=?", (task_id,)) or {}
+    cognitive_graph_service.graph_changed("task_updated", task_id)
+    return result
 
 
 @router.delete("/tasks/{task_id}")
@@ -151,6 +159,7 @@ def delete_task(task_id: str) -> dict:
     repository.execute("DELETE FROM tasks WHERE id=?", (task_id,))
     result = {"id": task_id, "deleted": True}
     repository.audit("manual_delete_task", {"id": task_id}, result, "success")
+    cognitive_graph_service.graph_changed("task_deleted", task_id)
     return result
 
 
@@ -176,6 +185,7 @@ async def upload_document(file: UploadFile = File(...)) -> dict:
     indexed = index_document(item_id, file.filename or stored_name, path, extension)
     result = repository.row("SELECT * FROM documents WHERE id=?", (item_id,)) or indexed
     repository.audit("upload_document", {"name": file.filename, "size": len(data)}, result, "success" if indexed["status"] == "ready" else "failed")
+    cognitive_graph_service.graph_changed("document_created", item_id)
     return result
 
 
@@ -192,6 +202,7 @@ def delete_document(document_id: str) -> dict:
         path.unlink()
     result = {"id": document_id, "deleted": True}
     repository.audit("delete_document", {"id": document_id}, result, "success")
+    cognitive_graph_service.graph_changed("document_deleted", document_id)
     return result
 
 

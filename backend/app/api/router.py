@@ -1,10 +1,11 @@
 from fastapi import APIRouter
 
-from app.api import backup, chat, conversations, domains, tools
+from app.api import backup, chat, cognitive, conversations, domains, tools
 
 
 router = APIRouter(prefix="/api")
 router.include_router(chat.router)
+router.include_router(cognitive.router)
 router.include_router(conversations.router)
 router.include_router(tools.router)
 router.include_router(backup.router)
