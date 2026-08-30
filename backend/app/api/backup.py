@@ -2,6 +2,7 @@ import shutil
 import sqlite3
 import tempfile
 import zipfile
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from fastapi import APIRouter
 
 from app.container import settings
 from app.core.persona import PERSONA_PATH, ensure_persona
+from app.services.repository import repository
 
 
 router = APIRouter(prefix="/backup", tags=["backup"])
@@ -36,4 +38,19 @@ def create_backup() -> dict:
                 for file in settings.library_path.iterdir():
                     if file.is_file():
                         archive.write(file, f"library/{file.name}")
+            profile_dir = settings.voice_path / "profile"
+            if profile_dir.exists():
+                for file in profile_dir.iterdir():
+                    if file.is_file():
+                        archive.write(file, f"voices/jarvis/profile/{file.name}")
+            voice_settings = {item["key"]: json.loads(item["value_json"]) for item in repository.rows("SELECT * FROM voice_settings")}
+            settings_file = temp / "voice-settings.json"
+            settings_file.write_text(json.dumps(voice_settings, ensure_ascii=False, indent=2), encoding="utf-8")
+            archive.write(settings_file, "voices/jarvis/voice-settings.json")
+            include = bool(voice_settings.get("include_references_in_backup", False))
+            references_dir = settings.voice_path / "references"
+            if include and references_dir.exists():
+                for file in references_dir.iterdir():
+                    if file.is_file():
+                        archive.write(file, f"voices/jarvis/references/{file.name}")
     return {"created": True, "filename": target.name, "path": str(target), "size_bytes": target.stat().st_size}

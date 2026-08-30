@@ -6,7 +6,7 @@ import { CognitiveScene } from './CognitiveScene'
 import { filterCognitiveGraph, relatedNodes } from './graphModel'
 import { useCognitiveGraph } from './useCognitiveGraph'
 
-const STATE_LABELS: Record<string,string>={IDLE:'Em repouso',THINKING:'Pensando',SEARCHING_MEMORY:'Buscando memória',SEARCHING_KNOWLEDGE:'Buscando conhecimento',USING_TOOL:'Usando ferramenta',WAITING_CONFIRMATION:'Aguardando confirmação',ERROR:'Erro',LISTENING:'Escuta preparada',SPEAKING:'Fala preparada'}
+const STATE_LABELS: Record<string,string>={IDLE:'Em repouso',THINKING:'Pensando',SEARCHING_MEMORY:'Buscando memória',SEARCHING_KNOWLEDGE:'Buscando conhecimento',USING_TOOL:'Usando ferramenta',WAITING_CONFIRMATION:'Aguardando confirmação',ERROR:'Erro',LISTENING:'Ouvindo',TRANSCRIBING:'Transcrevendo',SPEAKING:'Falando'}
 const KIND_LABELS:Record<string,string>={core:'Núcleo',memory:'Memória',document:'Documento',task:'Tarefa',tool:'Ferramenta'}
 const KINDS:CognitiveNodeKind[]=['memory','document','task','tool']
 

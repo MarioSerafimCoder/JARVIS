@@ -61,7 +61,7 @@ O caso de 100 itens não formou relações porque o dataset controlado não cont
 
 ## Estados e eventos
 
-Estados ativos: IDLE, THINKING, SEARCHING_MEMORY, SEARCHING_KNOWLEDGE, USING_TOOL, WAITING_CONFIRMATION e ERROR. LISTENING e SPEAKING estão tipados, porém não são ativados.
+Estados ativos: IDLE, LISTENING, TRANSCRIBING, THINKING, SEARCHING_MEMORY, SEARCHING_KNOWLEDGE, USING_TOOL, WAITING_CONFIRMATION, SPEAKING e ERROR. O Voice Engine emite os estados vocais reais; a cena apenas ajusta discretamente cor/qualidade.
 
 Eventos: MEMORY_RETRIEVED, MEMORY_CREATED, DOCUMENT_RETRIEVED, TOOL_REQUESTED, TOOL_EXECUTED, TOOL_FAILED, GENERATION_STARTED, GENERATION_FINISHED, ERROR, GRAPH_CHANGED e CONTEXT_SELECTED.
 
@@ -75,4 +75,4 @@ Esses eventos registram transições e entidades envolvidas; nenhum conteúdo de
 
 ## Limites desta fase
 
-Embeddings locais são opcionais e FTS5 permanece disponível. Não inclui vector database externo, LoRA, STT, TTS, wake word, Bluetooth, ESP32 ou integrações cloud. Memória, Biblioteca, Tarefas e Busca continuam sendo formas textuais completas de acesso aos mesmos dados.
+Embeddings locais são opcionais e FTS5 permanece disponível. Não inclui vector database externo, LoRA, wake word, Bluetooth, ESP32 ou integrações cloud. Memória, Biblioteca, Tarefas e Busca continuam sendo formas textuais completas de acesso aos mesmos dados.

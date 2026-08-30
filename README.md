@@ -18,8 +18,10 @@ Jarvis Local é a fundação de um sistema operacional pessoal de IA: conversa e
 - feedback por resposta, rotas reais, command palette navegável, briefing Agora e onboarding local;
 - backup consistente do banco e dos arquivos em ZIP;
 - exportação local em JSON pelo endpoint `/api/export`.
+- Voice Engine local com WebSocket bidirecional, estados LISTENING/TRANSCRIBING/SPEAKING, barge-in, confirmação segura e fallback textual;
+- Voice Lab em **Personalidade → Voz**, análise das 28 referências autorizadas, fingerprint persistente, cache LRU e worker isolado para faster-whisper/XTTS-v2.
 
-Consulte [INTELLIGENCE_ENGINE.md](docs/INTELLIGENCE_ENGINE.md) para a Fase 2, [COGNITIVE_CORE.md](docs/COGNITIVE_CORE.md) para o modelo visual e [ROADMAP.md](docs/ROADMAP.md) para a separação entre implementado e planejado.
+Consulte [VOICE_ARCHITECTURE.md](docs/VOICE_ARCHITECTURE.md) para a camada vocal, [VOICE_REFERENCE_REPORT.md](docs/VOICE_REFERENCE_REPORT.md) para os áudios, [INTELLIGENCE_ENGINE.md](docs/INTELLIGENCE_ENGINE.md) para a Fase 2 e [ROADMAP.md](docs/ROADMAP.md) para a separação entre implementado e planejado.
 
 ## Iniciar
 
@@ -42,6 +44,8 @@ Abra o PowerShell nesta pasta e execute:
 ```
 
 Depois abra [http://127.0.0.1:5173](http://127.0.0.1:5173). A documentação técnica da API fica em [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs).
+
+O chat textual inicia mesmo sem as dependências de voz. Para ativar o Voice Worker, leia e aceite conscientemente a licença não comercial do XTTS-v2 e siga [backend/voice_worker/README.md](backend/voice_worker/README.md). Em seguida, `start.ps1` detectará o ambiente isolado automaticamente.
 
 Para parar os processos iniciados pelo script:
 
@@ -73,7 +77,7 @@ npm run dev
 
 ## Dados e privacidade
 
-Os dados ficam em `data/`: banco em `data/database/jarvis.db`, documentos em `data/library/` e notas em `data/notes/`. Essa pasta, `.env` e logs privados estão ignorados pelo Git. Não há telemetria, analytics ou upload automático.
+Os dados ficam em `data/`: banco em `data/database/jarvis.db`, documentos em `data/library/`, notas em `data/notes/` e identidade vocal em `data/voices/jarvis/`. Essa pasta, `Jarvis-Voice/`, `.env` e logs privados estão ignorados pelo Git. Não há telemetria, analytics ou upload automático. Gravações do microfone são descartadas após transcrição por padrão.
 
 Use **Configurações → Criar backup local** para gerar um ZIP consistente em `backups/`. Para restaurar manualmente, pare o Jarvis e recoloque os arquivos da cópia nos mesmos caminhos. O endpoint `GET /api/export` fornece uma exportação JSON lógica.
 

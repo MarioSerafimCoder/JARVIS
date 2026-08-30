@@ -13,6 +13,8 @@ __pycache__/
 *.py[cod]
 data/
 backend/data/
+Jarvis-Voice/
+backend/voice_worker/.venv/
 logs/
 tmp/
 *.db
@@ -20,4 +22,5 @@ tmp/
 *.db-wal
 .backend.pid
 .frontend.pid
+.voice.pid
 .ollama.pid

@@ -76,4 +76,4 @@ O renderer mantém a cena Three.js entre mudanças de estado, seleção e destaq
 
 ## Fora do escopo
 
-Voz, STT, TTS, wake word, Google, Gmail, calendário externo, Home Assistant, mobile, ESP32, APIs pagas, OCR e LoRA continuam não implementados.
+Na Fase 2, voz ainda estava fora do escopo; a camada local STT/TTS foi adicionada posteriormente na Fase 3. Wake word, Google, Gmail, calendário externo, Home Assistant, mobile, ESP32, APIs pagas, OCR e LoRA continuam não implementados.

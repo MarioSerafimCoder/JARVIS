@@ -14,11 +14,14 @@ export interface ContextEvidence { memories?: Memory[]; documents?: ContextDocum
 export interface ToolAction { action_id: string; tool: string; input: Record<string, unknown>; status: string; id?: string; conversation_id?: string; created_at?: string; agent_run_id?: string }
 export interface ActivityItem { id: string; tool: string; status: string; timestamp: string; input: Record<string, unknown>; result: Record<string, unknown> }
 export interface SearchItem { type: string; id: string; path: string; title: string; subtitle?: string }
-export interface Health { status: string; architecture?: string; app?: {status:string}; ollama?: {status:string}; model?: {status:string;name:string}; cognitive_events?: {status:string}; llm: { status?: string; model?: string; model_available?: boolean; error?: string } }
+export interface Health { status: string; architecture?: string; app?: {status:string}; ollama?: {status:string}; model?: {status:string;name:string}; cognitive_events?: {status:string}; voice?: {status:string}; llm: { status?: string; model?: string; model_available?: boolean; error?: string } }
 export interface ChatResult { conversation_id: string; message: string; message_id?: string; context: ContextEvidence; actions: ToolAction[]; agent_run_id?: string; agent_status?: string }
 export interface StreamEvent { type: 'start' | 'token' | 'action' | 'done' | 'error'; conversation_id?: string; content?: string; message?: string; message_id?: string; context?: ContextEvidence; action?: ToolAction; actions?: ToolAction[]; agent_run_id?: string; agent_status?: string; memory_candidates?: MemoryCandidate[]; error?: { code: string; message: string } }
 
-export type CognitiveState = 'IDLE' | 'THINKING' | 'SEARCHING_MEMORY' | 'SEARCHING_KNOWLEDGE' | 'USING_TOOL' | 'WAITING_CONFIRMATION' | 'ERROR' | 'LISTENING' | 'SPEAKING'
+export type CognitiveState = 'IDLE' | 'THINKING' | 'SEARCHING_MEMORY' | 'SEARCHING_KNOWLEDGE' | 'USING_TOOL' | 'WAITING_CONFIRMATION' | 'ERROR' | 'LISTENING' | 'TRANSCRIBING' | 'SPEAKING'
+export interface VoiceProfile { profile_name:string; status:'REFERENCES_MISSING'|'NOT_BUILT'|'OUTDATED'|'BUILDING'|'READY'|'FAILED'; provider:string; reference_count:number; total_duration_seconds:number; fingerprint:string; language:string; worker:{status:string;stt?:{status:string};tts?:{status:string}}; voice_dna:Record<string,string> }
+export interface VoiceStatus { active_sessions:number; vad:{status:string;provider:string}; resource_policy:Record<string,unknown>; privacy:{raw_microphone_saved:boolean;external_audio_transfer:boolean;transport:string}; worker:{status:string;stt?:{status:string};tts?:{status:string}}; profile:VoiceProfile; text_fallback:boolean }
+export interface VoiceEvent { type:string; state?:CognitiveState; session_id?:string; turn_id?:string; text?:string; final?:boolean; audio?:string; mime_type?:string; message_id?:string; conversation_id?:string; action?:ToolAction; actions?:ToolAction[]; speech_text?:string; metadata?:Record<string,unknown>; error?:{code:string;message:string}; text_fallback?:boolean }
 export type CognitiveNodeKind = 'core' | 'memory' | 'document' | 'task' | 'tool'
 export type CognitiveQuality = 'AUTO' | 'HIGH' | 'MEDIUM' | 'LOW'
 export interface CognitivePosition { x: number; y: number; z: number }

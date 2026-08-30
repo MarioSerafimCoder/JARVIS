@@ -24,6 +24,13 @@ MEMÓRIA · TAREFAS · DOCUMENTOS   LLMProvider
 COGNITIVE GRAPH SERVICE ← SQLITE + TOOL REGISTRY
           ↓                         ↑ eventos reais
 THREE.JS / FALLBACK 2D ← SSE ← COGNITIVE STATE SERVICE
+
+MICROFONE → VAD → WEBSOCKET LOCAL → VOICE SESSION MANAGER
+                                      ↓
+                         VOICE WORKER ISOLADO (8766)
+                         faster-whisper / XTTS-v2
+                                      ↓
+                  PERFIL JARVIS PERSISTENTE → ALTO-FALANTE
 ```
 
 O frontend nunca acessa o SQLite diretamente. `AgentController` persiste `agent_runs`, itera entre modelo e ferramentas e pausa exatamente o mesmo run em ações `CONFIRM`. `ContextBuilder` seleciona itens inteiros: persona, resumo incremental, mensagens recentes, memórias ativas, trechos habilitados e tarefas relacionadas; o banco inteiro não é enviado ao modelo.
@@ -38,6 +45,6 @@ O estado de uma ação de escrita percorre `pending_confirmation → executing �
 
 Conversa, memória e biblioteca são domínios separados. Conversa é cronologia, memória é informação estruturada e biblioteca contém documentos externos com trechos pesquisáveis via SQLite FTS5.
 
-Voz, integrações, calendários, automações, mobile e ESP32 usam contratos ou páginas estruturais, mas não são declarados funcionais nesta versão.
+Voz usa contratos independentes e um worker Python isolado para não contaminar o backend. O VoiceSessionManager encaminha transcripts ao mesmo AgentController, respeita CONFIRM/DANGEROUS, fragmenta sentenças estáveis e retorna áudio pelo WebSocket. Integrações, calendários, automações, mobile e ESP32 continuam fora desta versão.
 
 O Cognitive Core é um consumidor adicional e não substitui os domínios existentes. O grafo usa layout determinístico, relações computáveis e limite de grau. O `CognitiveStateService` é agnóstico à UI e transmite somente estado operacional e ids de entidades, nunca chain-of-thought.

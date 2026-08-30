@@ -19,6 +19,21 @@ A Fase 1.5 consolida o Jarvis como aplicativo local utilizável, testado e empac
 - biblioteca com tags, descrição, coleção, controle de RAG e processamento em segundo plano;
 - health status separado para app, Ollama, modelo e eventos cognitivos.
 
+## Atualização - Fase 3 Voice Engine (30/08/2026)
+
+- 28 referências autorizadas detectadas, copiadas para dados privados, analisadas e fingerprintadas;
+- contratos STT/VAD/TTS/profile/session desacoplados do AgentController;
+- worker localhost isolado para faster-whisper small e XTTS-v2, sem dependências pesadas no backend principal;
+- perfil persistente por conditioning latents/embedding, estado OUTDATED e proibição de voz genérica silenciosa;
+- normalização de texto falado, sentence chunking, cache determinístico LRU e estilos de entrega com um único speaker;
+- WebSocket bidirecional, turn manager, barge-in, descarte de áudio bruto e confirmação inequívoca por voz/visual;
+- Chat com Conversar, transcript, fallback push-to-talk e controles essenciais;
+- Voice Lab em Personalidade com perfil, dispositivos, testes e configurações locais;
+- migrations, backup vocal opcional, relatório de referências, arquitetura e benchmark honesto;
+- 50 testes backend e 16 frontend aprovados; build Vite com 1.685 módulos.
+
+O provider real não foi marcado como pronto: XTTS-v2 exige aceitação explícita da licença CPML não comercial e os modelos ainda não estão instalados. Até essa decisão, a interface informa indisponibilidade e mantém o chat textual.
+
 ## Entregas principais
 
 - streaming de chat via SSE, atualização incremental, botão de parar, nova tentativa, cópia e timestamps;
@@ -55,7 +70,7 @@ A Fase 1.5 consolida o Jarvis como aplicativo local utilizável, testado e empac
 
 ## Funcionalidades deliberadamente fora do escopo
 
-Voz, wake word, calendários reais, automações, OAuth, Google/Microsoft/GitHub/Home Assistant, mobile, ESP32-S3, OCR, banco vetorial externo, LoRA e providers pagos continuam reservados para fases futuras.
+Wake word, calendários reais, automações, OAuth, Google/Microsoft/GitHub/Home Assistant, mobile, ESP32-S3, OCR, banco vetorial externo, LoRA e providers pagos continuam reservados para fases futuras.
 
 ## Limitações conhecidas
 

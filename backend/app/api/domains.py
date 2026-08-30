@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from app.container import provider, settings, tool_registry
+from app.container import provider, settings, tool_registry, voice_profile_manager, voice_worker_provider
 from app.core.cognitive_graph import cognitive_graph_service
 from app.core.config import PROJECT_ROOT, RUNTIME_ROOT
 from app.core.database import database, utc_now
@@ -46,12 +46,13 @@ def not_found(label: str) -> HTTPException:
 @router.get("/health")
 async def health() -> dict:
     llm = await provider.health()
+    voice = await voice_worker_provider.health()
     return {
         "status": "ok", "architecture": "local",
         "app": {"status": "online"}, "ollama": {"status": llm.get("status", "offline")},
         "model": {"status": "available" if llm.get("model_available") or llm.get("status") == "ok" else "unavailable", "name": settings.model_name},
         "cognitive_events": {"status": "online", "last_event_id": __import__("app.core.cognitive_state", fromlist=["cognitive_state_service"]).cognitive_state_service.snapshot()["last_event_id"]},
-        "llm": llm,
+        "llm": llm, "voice": voice,
     }
 
 
@@ -298,9 +299,10 @@ async def system() -> dict:
 
 
 @router.get("/settings")
-def get_app_settings() -> dict:
+async def get_app_settings() -> dict:
     values = {item["key"]: json.loads(item["value_json"]) for item in repository.rows("SELECT * FROM app_settings")}
-    return {"memory_behavior": values.get("memory_behavior", {"mode": "suggest"}), "model": {"name": settings.model_name, "context_length": settings.context_length}, "cognitive_core": {"max_relationship_degree": 4}, "privacy": {"architecture": "local", "telemetry": False}, "data": {"database": str(settings.database_path)}, "backup": {"directory": str(settings.backup_path)}, "system": {"max_agent_cycles": settings.max_agent_cycles}}
+    voice_values = {item["key"]: json.loads(item["value_json"]) for item in repository.rows("SELECT * FROM voice_settings")}
+    return {"memory_behavior": values.get("memory_behavior", {"mode": "suggest"}), "model": {"name": settings.model_name, "context_length": settings.context_length}, "cognitive_core": {"max_relationship_degree": 4}, "privacy": {"architecture": "local", "telemetry": False, "raw_microphone_saved": False}, "data": {"database": str(settings.database_path)}, "backup": {"directory": str(settings.backup_path), "include_voice_references": voice_values.get("include_references_in_backup", False)}, "system": {"max_agent_cycles": settings.max_agent_cycles}, "voice": {"resource_mode": settings.voice_resource_mode, "worker_url": settings.voice_worker_url, "profile": await voice_profile_manager.status()}}
 
 
 @router.put("/settings/memory")
@@ -318,7 +320,8 @@ async def onboarding() -> dict:
     for path in {PROJECT_ROOT / "data", RUNTIME_ROOT / "data"}:
         if path.resolve() != settings.database_path.parents[1].resolve() and path.exists():
             candidates.append({"path": str(path), "available": True})
-    return {"completed": bool(saved and json.loads(saved["value_json"]).get("completed")), "user_name": json.loads(profile["value_json"]).get("name", "") if profile else "", "backend": "online", "ollama": llm.get("status", "offline"), "model_available": bool(llm.get("model_available") or llm.get("status") == "ok"), "model": settings.model_name, "gpu_detected": Path("C:/Windows/System32/nvidia-smi.exe").exists(), "memory_behavior": get_app_settings()["memory_behavior"], "migration_candidates": candidates, "requires_account": False, "external_transfer": False}
+    app_settings = await get_app_settings()
+    return {"completed": bool(saved and json.loads(saved["value_json"]).get("completed")), "user_name": json.loads(profile["value_json"]).get("name", "") if profile else "", "backend": "online", "ollama": llm.get("status", "offline"), "model_available": bool(llm.get("model_available") or llm.get("status") == "ok"), "model": settings.model_name, "gpu_detected": Path("C:/Windows/System32/nvidia-smi.exe").exists(), "memory_behavior": app_settings["memory_behavior"], "migration_candidates": candidates, "requires_account": False, "external_transfer": False}
 
 
 @router.post("/onboarding/complete")

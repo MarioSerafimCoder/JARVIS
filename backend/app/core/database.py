@@ -140,6 +140,20 @@ CREATE TABLE IF NOT EXISTS processing_jobs (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL, entity_id TEXT NOT NULL, status TEXT NOT NULL,
   error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS voice_profiles (
+  id TEXT PRIMARY KEY, profile_name TEXT NOT NULL UNIQUE, provider TEXT NOT NULL,
+  status TEXT NOT NULL, fingerprint TEXT, reference_count INTEGER NOT NULL DEFAULT 0,
+  total_duration_seconds REAL NOT NULL DEFAULT 0, manifest_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS voice_settings (
+  key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS voice_sessions_metadata (
+  id TEXT PRIMARY KEY, conversation_id TEXT, status TEXT NOT NULL,
+  turn_count INTEGER NOT NULL DEFAULT 0, started_at TEXT NOT NULL,
+  ended_at TEXT, last_error TEXT
+);
 """
 
 
@@ -172,6 +186,10 @@ def initialize_database(path: Path | None = None) -> None:
         connection.execute(
             "INSERT OR IGNORE INTO schema_version VALUES (?,?,?)",
             (4, utc_now(), "intelligence engine, memory 2.0, feedback and agent runs"),
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO schema_version VALUES (?,?,?)",
+            (5, utc_now(), "local voice engine profiles, settings and session metadata"),
         )
         if migration_4_needed:
             connection.execute(
