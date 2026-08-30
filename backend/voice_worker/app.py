@@ -17,6 +17,9 @@ from pydantic import BaseModel
 ROOT = Path(os.getenv("JARVIS_VOICE_ROOT", Path(__file__).resolve().parents[2] / "data" / "voices" / "jarvis")).resolve()
 for name in ("references", "profile", "cache", "temp", "models"):
     (ROOT / name).mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("TTS_HOME", str(ROOT / "models" / "coqui"))
+
+LICENSE_MARKER = ROOT / "profile" / "xtts-license-accepted.json"
 
 app = FastAPI(title="Jarvis Local Voice Worker", version="0.1.0")
 _whisper = None
@@ -36,6 +39,13 @@ def package_status(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
 
 
+def xtts_license_accepted() -> bool:
+    accepted = os.getenv("JARVIS_XTTS_LICENSE_ACCEPTED") == "1" or LICENSE_MARKER.exists()
+    if accepted:
+        os.environ.setdefault("COQUI_TOS_AGREED", "1")
+    return accepted
+
+
 def load_whisper():
     global _whisper
     if _whisper is None:
@@ -49,7 +59,7 @@ def load_whisper():
 
 def load_xtts():
     global _xtts
-    if os.getenv("JARVIS_XTTS_LICENSE_ACCEPTED") != "1":
+    if not xtts_license_accepted():
         raise HTTPException(409, "A licença não comercial CPML do XTTS-v2 ainda não foi aceita.")
     if _xtts is None:
         from TTS.api import TTS
@@ -61,9 +71,10 @@ def load_xtts():
 @app.get("/health")
 def health() -> dict[str, Any]:
     stt_model = ROOT / "models" / "faster-whisper-small"
+    xtts_model = ROOT / "models" / "coqui" / "tts" / "tts_models--multilingual--multi-dataset--xtts_v2" / "model.pth"
     tts_package = package_status("TTS") and package_status("torch")
     stt_status = "ready" if package_status("faster_whisper") and stt_model.exists() else "model_not_found" if package_status("faster_whisper") else "dependency_missing"
-    tts_status = "ready" if tts_package and os.getenv("JARVIS_XTTS_LICENSE_ACCEPTED") == "1" else "license_not_accepted" if tts_package else "dependency_missing"
+    tts_status = "ready" if tts_package and xtts_license_accepted() and xtts_model.exists() else "model_not_found" if tts_package and xtts_license_accepted() else "license_not_accepted" if tts_package else "dependency_missing"
     return {"status": "ready" if stt_status == "ready" or tts_status == "ready" else "degraded", "architecture": "localhost_isolated_process", "stt": {"status": stt_status, "model": "small", "compute": "cpu_int8"}, "tts": {"status": tts_status, "model": "XTTS-v2", "license": "CPML non-commercial"}}
 
 

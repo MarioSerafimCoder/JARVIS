@@ -32,7 +32,7 @@ A Fase 1.5 consolida o Jarvis como aplicativo local utilizável, testado e empac
 - migrations, backup vocal opcional, relatório de referências, arquitetura e benchmark honesto;
 - 50 testes backend e 16 frontend aprovados; build Vite com 1.685 módulos.
 
-O provider real não foi marcado como pronto: XTTS-v2 exige aceitação explícita da licença CPML não comercial e os modelos ainda não estão instalados. Até essa decisão, a interface informa indisponibilidade e mantém o chat textual.
+O usuário aceitou explicitamente a licença CPML para uso não comercial. PyTorch 2.8/CUDA 12.8, faster-whisper small e XTTS-v2 foram instalados no worker isolado; o perfil real foi construído com as 28 referências e marcado como `READY`. Uma amostra foi sintetizada pelo XTTS e retranscrita corretamente pelo faster-whisper, sem cloud.
 
 ## Entregas principais
 
