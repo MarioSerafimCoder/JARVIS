@@ -9,7 +9,7 @@ const COLORS: Record<string, number> = {
   facts: 0xe09b45, instructions: 0xff7a1a, decisions: 0xc97b30, other: 0x9b7048,
   knowledge: 0xffd08a, operations: 0xe66b2e, tools: 0xa96b3c,
 }
-const STATE_COLOR: Record<CognitiveState, number> = { IDLE:0xc78645, THINKING:0xffa62b, SEARCHING_MEMORY:0xffbf58, SEARCHING_KNOWLEDGE:0xffd894, USING_TOOL:0xff7628, WAITING_CONFIRMATION:0xeaa54d, ERROR:0xff4d3d, LISTENING:0xb9ef4a, TRANSCRIBING:0xf4bd62, SPEAKING:0xd78b41 }
+const STATE_COLOR: Record<CognitiveState, number> = { IDLE:0xc78645, THINKING:0xffa62b, SEARCHING_MEMORY:0xffbf58, SEARCHING_KNOWLEDGE:0xffd894, SEARCHING_WEB:0x65b9e8, BROWSING:0x4f91bd, USING_TOOL:0xff7628, WAITING_CONFIRMATION:0xeaa54d, ERROR:0xff4d3d, LISTENING:0xb9ef4a, TRANSCRIBING:0xf4bd62, SPEAKING:0xd78b41 }
 export function CognitiveScene({ graph, state, highlighted, selectedId, onSelect, quality, resetKey, forceFallback = false }: { graph: CognitiveGraph; state: CognitiveState; highlighted: Set<string>; selectedId?: string; onSelect: (node?: CognitiveNode) => void; quality: CognitiveQuality; resetKey: number; forceFallback?: boolean }) {
   const host = useRef<HTMLDivElement>(null)
   const [fallback, setFallback] = useState(forceFallback)

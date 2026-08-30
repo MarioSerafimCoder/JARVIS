@@ -1,5 +1,14 @@
 # Arquitetura
 
+## Camada de inteligência externa controlada
+
+O núcleo permanece local-first. Web Intelligence e Browser Agent são capacidades opcionais e separadas, sempre mediadas pelo Tool Registry e pelo AgentController. O modelo não possui rede, shell, Playwright, cookies ou JavaScript livre.
+
+- Web: provider/fetcher -> sanitização/SSRF -> fontes persistidas.
+- Browser: policy/session/profile -> adapter semântico -> worker Playwright isolado.
+- UI: estados `SEARCHING_WEB`/`BROWSING`, cards de fontes, Configurações e Conexões.
+- Auditoria: WEB SEARCH, WEB READ e BROWSER ACTION sem segredos.
+
 ```text
 USUÁRIO
   ↓

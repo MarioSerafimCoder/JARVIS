@@ -23,4 +23,7 @@ tmp/
 .backend.pid
 .frontend.pid
 .voice.pid
+.browser.pid
+data/browser/profiles/
+backend/browser_worker/.venv/
 .ollama.pid

@@ -24,7 +24,7 @@ function CommandPalette({close,navigate}:{close:()=>void;navigate:(page:Page,id?
 
 function CognitiveIndicator({open}:{open:()=>void}){
   const{state,connected}=useCognitiveGraph()
-  const short=state==='SEARCHING_MEMORY'?'MEMORY':state==='SEARCHING_KNOWLEDGE'?'KNOWLEDGE':state==='USING_TOOL'?'TOOL':state==='WAITING_CONFIRMATION'?'WAITING':state
+  const short=state==='SEARCHING_MEMORY'?'MEMORY':state==='SEARCHING_KNOWLEDGE'?'KNOWLEDGE':state==='SEARCHING_WEB'?'WEB':state==='BROWSING'?'BROWSER':state==='USING_TOOL'?'TOOL':state==='WAITING_CONFIRMATION'?'WAITING':state
   return <button className={`cognitive-indicator state-${state.toLowerCase()}`} onClick={open} title="Abrir mapa cognitivo"><i className={connected?'online':''}/><span>{short}</span></button>
 }
 

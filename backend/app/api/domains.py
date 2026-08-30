@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from app.container import provider, settings, tool_registry, voice_profile_manager, voice_worker_provider
+from app.container import browser_agent, provider, settings, tool_registry, voice_profile_manager, voice_worker_provider
 from app.core.cognitive_graph import cognitive_graph_service
 from app.core.config import PROJECT_ROOT, RUNTIME_ROOT
 from app.core.database import database, utc_now
@@ -48,11 +48,11 @@ async def health() -> dict:
     llm = await provider.health()
     voice = await voice_worker_provider.health()
     return {
-        "status": "ok", "architecture": "local",
+        "status": "ok", "architecture": "local-first with optional controlled network",
         "app": {"status": "online"}, "ollama": {"status": llm.get("status", "offline")},
         "model": {"status": "available" if llm.get("model_available") or llm.get("status") == "ok" else "unavailable", "name": settings.model_name},
         "cognitive_events": {"status": "online", "last_event_id": __import__("app.core.cognitive_state", fromlist=["cognitive_state_service"]).cognitive_state_service.snapshot()["last_event_id"]},
-        "llm": llm, "voice": voice,
+        "llm": llm, "voice": voice, "browser": browser_agent.worker.health(),
     }
 
 
@@ -289,7 +289,8 @@ async def preview_persona(payload: PreviewInput) -> dict:
 @router.get("/usage")
 def usage() -> dict:
     totals = repository.row("SELECT COUNT(*) AS inferences,COALESCE(SUM(input_tokens),0) AS input_tokens,COALESCE(SUM(output_tokens),0) AS output_tokens,COALESCE(SUM(estimated_cost),0) AS cost FROM usage_events") or {}
-    return {"provider": "Ollama", "model": settings.model_name, "external_apis": 0, **totals}
+    network = repository.row("SELECT COUNT(*) AS count FROM activity_log WHERE tool LIKE 'web_%' OR tool LIKE 'browser_%'") or {"count": 0}
+    return {"provider": "Ollama", "model": settings.model_name, "network_actions": network["count"], "paid_external_apis": 0, **totals}
 
 
 @router.get("/system")
@@ -302,7 +303,7 @@ async def system() -> dict:
 async def get_app_settings() -> dict:
     values = {item["key"]: json.loads(item["value_json"]) for item in repository.rows("SELECT * FROM app_settings")}
     voice_values = {item["key"]: json.loads(item["value_json"]) for item in repository.rows("SELECT * FROM voice_settings")}
-    return {"memory_behavior": values.get("memory_behavior", {"mode": "suggest"}), "model": {"name": settings.model_name, "context_length": settings.context_length}, "cognitive_core": {"max_relationship_degree": 4}, "privacy": {"architecture": "local", "telemetry": False, "raw_microphone_saved": False}, "data": {"database": str(settings.database_path)}, "backup": {"directory": str(settings.backup_path), "include_voice_references": voice_values.get("include_references_in_backup", False)}, "system": {"max_agent_cycles": settings.max_agent_cycles}, "voice": {"resource_mode": settings.voice_resource_mode, "worker_url": settings.voice_worker_url, "profile": await voice_profile_manager.status()}}
+    return {"memory_behavior": values.get("memory_behavior", {"mode": "suggest"}), "web_access": values.get("web_access", {"mode": "ASK"}), "browser_access": values.get("browser_access", {"mode": "OFF"}), "model": {"name": settings.model_name, "context_length": settings.context_length}, "cognitive_core": {"max_relationship_degree": 4}, "privacy": {"architecture": "local_first", "telemetry": False, "raw_microphone_saved": False, "network_only_when_enabled": True, "cookies_exposed_to_model": False}, "data": {"database": str(settings.database_path), "browser_profile": str(settings.browser_profile_path)}, "backup": {"directory": str(settings.backup_path), "include_voice_references": voice_values.get("include_references_in_backup", False)}, "system": {"max_agent_cycles": settings.max_agent_cycles}, "voice": {"resource_mode": settings.voice_resource_mode, "worker_url": settings.voice_worker_url, "profile": await voice_profile_manager.status()}}
 
 
 @router.put("/settings/memory")
@@ -345,7 +346,8 @@ def devices() -> list[dict]:
 
 @router.get("/integrations")
 def integrations() -> list[dict]:
-    return [{"name": name, "status": "not_connected", "implemented": False} for name in ("Google", "Microsoft", "GitHub", "Home Assistant")]
+    amazon = browser_agent.sessions.status("amazon")
+    return [{"name": "Amazon", "site": "amazon", "status": amazon.get("status", "not_connected"), "authenticated": amazon.get("authenticated", False), "implemented": True, "capabilities": amazon.get("capabilities", []), "manual_login": True}, *[{"name": name, "status": "not_connected", "implemented": False} for name in ("Google", "Microsoft", "GitHub", "Home Assistant")]]
 
 
 @router.get("/search")

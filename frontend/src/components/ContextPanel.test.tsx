@@ -14,4 +14,8 @@ describe('ContextPanel', () => {
   it('aciona o fechamento do painel', () => {
     const close=vi.fn(); render(<ContextPanel close={close} context={{}}/>); fireEvent.click(screen.getByLabelText('Fechar contexto')); expect(close).toHaveBeenCalledOnce()
   })
+  it('mostra consulta sanitizada, fonte web e estado do navegador', () => {
+    render(<ContextPanel close={() => undefined} context={{web:{queries:[{query:'versão atual [email_removido]',redactions:['email']}],pages:[{source_id:'s1',title:'Fonte',url:'https://example.com',domain:'example.com',retrieved_at:'2026-08-30T12:00:00Z'}],sources:[{source_id:'s1',title:'Fonte oficial',url:'https://example.com',domain:'example.com',retrieved_at:'2026-08-30T12:00:00Z',excerpt:'Informação atual'}],used:['s1']},browser:[{action:'read_cart',site:'amazon',verified:true,status:'success'}]}}/>)
+    expect(screen.getByText('versão atual [email_removido]')).toBeInTheDocument();expect(screen.getByText('Fonte oficial')).toBeInTheDocument();expect(screen.getByText(/amazon · verificado/)).toBeInTheDocument()
+  })
 })

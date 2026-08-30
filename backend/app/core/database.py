@@ -154,6 +154,28 @@ CREATE TABLE IF NOT EXISTS voice_sessions_metadata (
   turn_count INTEGER NOT NULL DEFAULT 0, started_at TEXT NOT NULL,
   ended_at TEXT, last_error TEXT
 );
+CREATE TABLE IF NOT EXISTS web_sources (
+  id TEXT PRIMARY KEY, conversation_id TEXT, message_id TEXT, query TEXT,
+  title TEXT NOT NULL, url TEXT NOT NULL, domain TEXT NOT NULL,
+  published_at TEXT, retrieved_at TEXT NOT NULL, excerpt TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_web_sources_conversation ON web_sources(conversation_id, retrieved_at);
+CREATE TABLE IF NOT EXISTS browser_sites (
+  site TEXT PRIMARY KEY, status TEXT NOT NULL, profile_path TEXT NOT NULL,
+  authenticated INTEGER NOT NULL DEFAULT 0, capabilities_json TEXT NOT NULL DEFAULT '[]',
+  last_checked_at TEXT, last_error TEXT
+);
+CREATE TABLE IF NOT EXISTS browser_sessions_metadata (
+  id TEXT PRIMARY KEY, site TEXT NOT NULL, status TEXT NOT NULL,
+  authenticated INTEGER NOT NULL DEFAULT 0, started_at TEXT NOT NULL,
+  ended_at TEXT, last_error TEXT
+);
+CREATE TABLE IF NOT EXISTS product_candidates (
+  id TEXT PRIMARY KEY, site TEXT NOT NULL, title TEXT NOT NULL, price TEXT,
+  seller TEXT, rating TEXT, review_count TEXT, delivery TEXT, prime INTEGER NOT NULL DEFAULT 0,
+  availability TEXT, url TEXT NOT NULL, variant TEXT, observed_at TEXT NOT NULL,
+  raw_json TEXT NOT NULL DEFAULT '{}'
+);
 """
 
 
@@ -190,6 +212,10 @@ def initialize_database(path: Path | None = None) -> None:
         connection.execute(
             "INSERT OR IGNORE INTO schema_version VALUES (?,?,?)",
             (5, utc_now(), "local voice engine profiles, settings and session metadata"),
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO schema_version VALUES (?,?,?)",
+            (6, utc_now(), "web intelligence evidence and isolated browser agent metadata"),
         )
         if migration_4_needed:
             connection.execute(

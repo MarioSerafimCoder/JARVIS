@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     voice_worker_url: str = "http://127.0.0.1:8766"
     voice_stt_model: str = "small"
     voice_resource_mode: str = "AUTO"
+    browser_worker_url: str = "http://127.0.0.1:8767"
+    browser_profile_path: Path = Path("data/browser/profiles/jarvis")
     max_recent_messages: int = 16
     max_memory_items: int = 6
     max_document_chunks: int = 5
@@ -33,7 +35,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     def model_post_init(self, __context: object) -> None:
-        for field_name in ("database_path", "library_path", "notes_path", "backup_path", "voice_path"):
+        for field_name in ("database_path", "library_path", "notes_path", "backup_path", "voice_path", "browser_profile_path"):
             value = getattr(self, field_name)
             if not value.is_absolute():
                 setattr(self, field_name, RUNTIME_ROOT / value)
@@ -45,6 +47,7 @@ class Settings(BaseSettings):
         self.backup_path.mkdir(parents=True, exist_ok=True)
         for directory in ("references", "profile", "cache", "generated", "temp", "models"):
             (self.voice_path / directory).mkdir(parents=True, exist_ok=True)
+        self.browser_profile_path.mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache

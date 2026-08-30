@@ -1,5 +1,13 @@
 # Relatório de consolidação do cérebro local
 
+## Web Intelligence e Browser Agent — 30/08/2026
+
+Implementados dois caminhos estritamente separados: pesquisa/leitura pública com evidências e automação de site via adapter semântico. O banco foi migrado para versão 6 com fontes, metadados de sessão/site e candidatos de produto. O frontend ganhou modos de acesso, conexão Amazon, fontes por resposta e contexto WEB/BROWSER.
+
+Validação: 62 testes backend, 18 testes frontend e build Vite/TypeScript com 1.685 módulos. Busca real: ~1,05 s para três resultados; leitura real: ~0,58 s para página pequena. Browser Worker respondeu `ready` com Playwright 1.55 usando Edge existente. O smoke test autenticado Amazon permanece manual e não foi falsamente marcado como concluído. Checkout não foi criado.
+
+Limitações reais: seletores Amazon podem variar por região/experimento; vendedor/reviews nem sempre estão presentes; autenticação, 2FA e CAPTCHA exigem usuário; nenhuma ação sensível é executada sem confirmação e verificação.
+
 Data: 29/08/2026
 
 ## Resultado

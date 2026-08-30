@@ -14,9 +14,16 @@ from app.tools.base import RiskLevel, Tool
 
 
 class FunctionTool(Tool):
-    def __init__(self, name: str, description: str, schema: dict[str, Any], risk: RiskLevel, function, input_model: type[BaseModel] | None = None):
+    def __init__(self, name: str, description: str, schema: dict[str, Any], risk: RiskLevel, function, input_model: type[BaseModel] | None = None, risk_resolver=None, blocked_message: str | None = None):
         self.name, self.description, self.input_schema, self.risk_level = name, description, schema, risk
         self.function, self.input_model = function, input_model
+        self.risk_resolver, self.blocked_message = risk_resolver, blocked_message
+
+    def risk_for(self, payload: dict[str, Any]) -> RiskLevel:
+        return self.risk_resolver(payload) if self.risk_resolver else self.risk_level
+
+    def blocked_reason(self, payload: dict[str, Any]) -> str:
+        return self.blocked_message or super().blocked_reason(payload)
 
     def execute(self, payload: dict[str, Any]) -> dict[str, Any]:
         if self.input_model:

@@ -61,6 +61,28 @@ class AgentController:
         cognitive_state_service.set_state(CognitiveState.THINKING, reason="generation")
         cognitive_state_service.emit("CONTEXT_SELECTED", {"node_ids": memories + documents + tasks})
 
+    @staticmethod
+    def _record_network_evidence(name: str, outcome: dict[str, Any], evidence: dict[str, Any], conversation_id: str) -> None:
+        if not isinstance(outcome.get("data"), dict) or (outcome.get("status") != "success" and not name.startswith("browser_")):
+            return
+        data = outcome["data"]
+        web = evidence.setdefault("web", {"queries": [], "pages": [], "sources": [], "used": []})
+        if name == "web_search":
+            web["queries"].append({"query": data.get("query"), "searched_at": data.get("sources", [{}])[0].get("retrieved_at") if data.get("sources") else None, "redactions": data.get("redactions", [])})
+            for source in data.get("sources", []):
+                if not any(item.get("source_id") == source.get("source_id") for item in web["sources"]):
+                    web["sources"].append(source)
+                    repository.execute(
+                        "INSERT OR REPLACE INTO web_sources VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        (source["source_id"], conversation_id, evidence.get("source_message_id"), data.get("query"), source.get("title", ""), source.get("url", ""), source.get("domain", ""), source.get("published_at"), source.get("retrieved_at"), source.get("excerpt", "")),
+                    )
+        elif name == "web_read":
+            page = {key: data.get(key) for key in ("source_id", "title", "url", "domain", "retrieved_at", "truncated")}
+            web["pages"].append(page)
+            web["used"].append(data.get("source_id"))
+        elif name.startswith("browser_"):
+            evidence.setdefault("browser", []).append({"action": name, "site": data.get("site"), "verified": data.get("verified"), "status": data.get("status", outcome.get("status"))})
+
     def _start(self, message: str, conversation_id: str | None) -> tuple[str, str, dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
         conversation = self._conversation(conversation_id, message)
         conversation_id = conversation["id"]
@@ -98,6 +120,7 @@ class AgentController:
             for name, arguments in calls:
                 outcome = self.executor.request(name, arguments, conversation_id, run_id)
                 actions.append(outcome)
+                self._record_network_evidence(name, outcome, evidence, conversation_id)
                 agent_run_service.step(run_id, step_count, "tool", outcome["status"], tool_name=name, input_data=arguments, result=outcome)
                 if outcome["status"] == "pending_confirmation":
                     evidence.update({"actions": actions, "agent_run_id": run_id, "agent_steps": step_count})
@@ -173,6 +196,7 @@ class AgentController:
                 for name, arguments in calls:
                     outcome = self.executor.request(name, arguments, conversation_id, run_id)
                     actions.append(outcome)
+                    self._record_network_evidence(name, outcome, evidence, conversation_id)
                     agent_run_service.step(run_id, step_count, "tool", outcome["status"], tool_name=name, input_data=arguments, result=outcome)
                     yield {"type": "action", "action": outcome, "agent_run_id": run_id}
                     if outcome["status"] == "pending_confirmation":
@@ -223,6 +247,8 @@ class AgentController:
                 agent_run_service.update(run_id, status="cancelled", messages=run["messages"] + [tool_message], step_count=run["step_count"], context=run["context"])
             cognitive_state_service.set_state(CognitiveState.IDLE, reason="action_cancelled")
             return {**result, "conversation_id": conversation_id, "message": message, "message_id": assistant["id"], "context": {"actions": [result], "agent_run_id": run_id}, "agent_status": "cancelled"}
+        if run:
+            self._record_network_evidence(action["tool"], result, run["context"], conversation_id)
         if not run:
             built = self.context_builder.build(conversation_id, action["tool"], load_persona())
             response = await self.provider.chat(built.messages + [tool_message])

@@ -15,6 +15,13 @@ class Tool(ABC):
     input_schema: dict[str, Any]
     risk_level: RiskLevel
 
+    def risk_for(self, payload: dict[str, Any]) -> RiskLevel:
+        """Resolve risk at request time so policy settings can change without restart."""
+        return self.risk_level
+
+    def blocked_reason(self, payload: dict[str, Any]) -> str:
+        return "Ferramenta perigosa desabilitada nesta versão."
+
     @abstractmethod
     def execute(self, payload: dict[str, Any]) -> dict[str, Any]: ...
 
@@ -23,4 +30,3 @@ class Tool(ABC):
             "type": "function",
             "function": {"name": self.name, "description": self.description, "parameters": self.input_schema},
         }
-

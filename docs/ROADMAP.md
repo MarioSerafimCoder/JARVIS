@@ -1,5 +1,19 @@
 # Roadmap
 
+## Concluído — Web Intelligence / Browser Agent
+
+- [x] Busca pública real e leitura com fontes
+- [x] SSRF, redirecionamentos e consulta sanitizada
+- [x] Modos Web OFF/ASK/ON
+- [x] Worker Playwright e perfil persistente dedicado
+- [x] Sessão/login manual sem cookies no modelo
+- [x] Adaptador Amazon semântico e carrinho confirmável
+- [x] Revalidação de preço e verificação do carrinho
+- [x] UI de Configurações, Conexões, fontes e contexto
+- [x] Testes fake e testes de segurança
+- [ ] Smoke test autenticado da Amazon (depende do login manual do usuário)
+- [ ] Adapters adicionais somente após política e suíte fake equivalentes
+
 - **Fase 1 - cérebro local (concluída):** Qwen/Ollama, streaming cancelável, conversa, persona, memória, ferramentas confirmáveis, tarefas, auditoria, CRUD e interface empacotada para Windows.
 - **Fase 1.5 - consolidação (concluída):** retrievers modulares, FTS5 com localização, orçamento e inspeção de contexto, defesa contra instruções em documentos, erros normalizados, migrações simples, backup e testes com FakeLLM/React.
 - **Fase 1.6 - Cognitive Core (concluída):** grafo cognitivo 3D baseado em dados reais, relações determinísticas e coocorrência limitada, estados/eventos SSE, mapa expandido, seleção, busca, filtros, LOD e fallback 2D.

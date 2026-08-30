@@ -1,5 +1,16 @@
 # Jarvis Local
 
+## Web Intelligence e Browser Agent
+
+O Jarvis pode pesquisar e ler a web pública com fontes, além de controlar um perfil dedicado do Microsoft Edge por ações semânticas. O modo offline continua funcionando; Web Access começa em **ASK** e Browser Access em **OFF**.
+
+- Configure os modos em **Configurações**.
+- Conecte a Amazon em **Conexões**; login, 2FA e CAPTCHA são manuais.
+- Busca/leitura web mostram fontes no chat e no Inspetor de contexto.
+- Carrinho exige confirmação e verificação. Checkout/finalizar pedido não é implementado.
+
+Na instalação normal, `pip install -r backend/requirements.txt` inclui Playwright. Para uma instalação existente, execute `./setup-browser.ps1`. `./start.ps1` inicia o Browser Worker automaticamente quando disponível. Consulte [Web Architecture](docs/WEB_ARCHITECTURE.md), [Web Security](docs/WEB_SECURITY.md), [Browser Agent](docs/BROWSER_AGENT.md) e [Browser Security](docs/BROWSER_SECURITY.md).
+
 Jarvis Local é a fundação de um sistema operacional pessoal de IA: conversa em português, persiste histórico, separa memória e documentos, gerencia tarefas e só executa ações registradas depois da política de segurança adequada. O núcleo usa Qwen 3.5 4B pelo Ollama e não chama APIs pagas.
 
 ## O que já funciona
