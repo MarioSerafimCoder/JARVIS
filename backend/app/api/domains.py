@@ -2,52 +2,27 @@ import json
 import platform
 import uuid
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
+from pydantic import BaseModel
 
 from app.container import provider, settings, tool_registry
 from app.core.cognitive_graph import cognitive_graph_service
+from app.core.config import PROJECT_ROOT, RUNTIME_ROOT
 from app.core.database import database, utc_now
 from app.core.persona import load_persona, save_persona
 from app.core.security import safe_child_path, validate_upload
-from app.services.knowledge import index_document, search_documents
+from app.services.agent_runs import agent_run_service
+from app.services.domains import conversation_service, knowledge_service, memory_service, task_service
+from app.services.embeddings import embedding_provider
+from app.services.knowledge import index_document
+from app.services.memory_consolidator import memory_consolidator
 from app.services.repository import repository
+from app.services.schemas import CandidatePatch, DocumentMetadataInput, MemoryBehaviorInput, MemoryInput, TaskInput
 
 
 router = APIRouter()
-
-
-def not_found(label: str) -> HTTPException:
-    return HTTPException(status_code=404, detail=f"{label} não encontrado.")
-
-
-class ChatInput(BaseModel):
-    message: str = Field(min_length=1, max_length=12000)
-    conversation_id: str | None = None
-
-
-class MemoryInput(BaseModel):
-    content: str = Field(min_length=1, max_length=8000)
-    category: Literal["preference", "person", "project", "routine", "fact", "instruction", "decision", "other"] = "other"
-    importance: int = Field(default=3, ge=1, le=5)
-    source_type: Literal["conversation", "manual", "document", "integration", "system"] = "manual"
-    source_reference: str | None = None
-
-
-class TaskInput(BaseModel):
-    title: str = Field(min_length=1, max_length=300)
-    description: str = ""
-    status: Literal["inbox", "planned", "doing", "done", "cancelled"] = "inbox"
-    priority: Literal["low", "normal", "high", "critical"] = "normal"
-    due_at: str | None = None
-    project: str | None = None
-    estimated_minutes: int | None = Field(default=None, ge=1, le=100000)
-
-
-class ConfirmationInput(BaseModel):
-    approved: bool
 
 
 class PersonaInput(BaseModel):
@@ -59,134 +34,197 @@ class PreviewInput(BaseModel):
     sample: str = "Como você responderia se eu estivesse adiando uma tarefa importante?"
 
 
+class OnboardingInput(BaseModel):
+    user_name: str
+    memory_mode: str = "suggest"
+
+
+def not_found(label: str) -> HTTPException:
+    return HTTPException(status_code=404, detail=f"{label} não encontrado.")
+
+
 @router.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "llm": await provider.health()}
+    llm = await provider.health()
+    return {
+        "status": "ok", "architecture": "local",
+        "app": {"status": "online"}, "ollama": {"status": llm.get("status", "offline")},
+        "model": {"status": "available" if llm.get("model_available") or llm.get("status") == "ok" else "unavailable", "name": settings.model_name},
+        "cognitive_events": {"status": "online", "last_event_id": __import__("app.core.cognitive_state", fromlist=["cognitive_state_service"]).cognitive_state_service.snapshot()["last_event_id"]},
+        "llm": llm,
+    }
+
+
+@router.get("/briefing")
+def briefing() -> dict:
+    tasks = repository.rows("SELECT * FROM tasks WHERE status NOT IN ('done','cancelled') ORDER BY CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 ELSE 2 END,due_at IS NULL,due_at LIMIT 20")
+    now = utc_now()
+    important = [item for item in tasks if item["priority"] in {"critical", "high"}]
+    overdue = [item for item in tasks if item.get("due_at") and item["due_at"] < now]
+    return {
+        "next_action": (overdue or important or tasks or [None])[0],
+        "important": important[:5], "overdue": overdue[:5],
+        "waiting": repository.rows("SELECT id AS action_id,tool,input_json,status,created_at FROM pending_actions WHERE status='pending_confirmation' ORDER BY created_at DESC LIMIT 5"),
+        "memory_candidates": memory_consolidator.list()[:5],
+        "activity": repository.rows("SELECT id,tool,status,timestamp FROM activity_log ORDER BY timestamp DESC LIMIT 5"),
+    }
 
 
 @router.get("/memory")
-def list_memory(query: str | None = None) -> list[dict]:
-    if query:
-        return repository.rows("SELECT * FROM memories WHERE content LIKE ? ORDER BY updated_at DESC", (f"%{query}%",))
-    return repository.rows("SELECT * FROM memories ORDER BY updated_at DESC")
+def list_memory(query: str | None = None, status: str | None = "active") -> list[dict]:
+    return memory_service.list(query, status)
+
+
+@router.get("/memory/{memory_id}")
+def get_memory(memory_id: str) -> dict:
+    result = memory_service.get(memory_id)
+    if not result:
+        raise not_found("Memória")
+    result["history"] = repository.rows("SELECT * FROM memories WHERE supersedes_id=? ORDER BY created_at", (memory_id,))
+    return result
 
 
 @router.post("/memory")
 def create_memory(payload: MemoryInput) -> dict:
-    item_id, now = str(uuid.uuid4()), utc_now()
-    with database() as connection:
-        connection.execute(
-            "INSERT INTO memories VALUES (?,?,?,?,?,?,?,?,?)",
-            (item_id, payload.content, payload.category, payload.importance, payload.source_type, payload.source_reference, now, now, None),
-        )
-        connection.execute("INSERT INTO memories_fts VALUES (?,?,?)", (item_id, payload.content, payload.category))
-    result = repository.row("SELECT * FROM memories WHERE id=?", (item_id,)) or {}
-    repository.audit("manual_save_memory", payload.model_dump(), result, "success")
-    cognitive_graph_service.memory_created(item_id)
-    return result
+    return memory_service.create(payload)
 
 
 @router.put("/memory/{memory_id}")
 def update_memory(memory_id: str, payload: MemoryInput) -> dict:
-    if not repository.row("SELECT id FROM memories WHERE id=?", (memory_id,)):
-        raise not_found("Memória")
-    with database() as connection:
-        connection.execute(
-            "UPDATE memories SET content=?, category=?, importance=?, source_type=?, source_reference=?, updated_at=? WHERE id=?",
-            (payload.content, payload.category, payload.importance, payload.source_type, payload.source_reference, utc_now(), memory_id),
-        )
-        connection.execute("DELETE FROM memories_fts WHERE id=?", (memory_id,))
-        connection.execute("INSERT INTO memories_fts VALUES (?,?,?)", (memory_id, payload.content, payload.category))
-    result = repository.row("SELECT * FROM memories WHERE id=?", (memory_id,)) or {}
-    cognitive_graph_service.graph_changed("memory_updated", memory_id)
-    return result
+    try:
+        return memory_service.update(memory_id, payload)
+    except ValueError as exc:
+        raise not_found("Memória") from exc
+
+
+@router.post("/memory/{memory_id}/archive")
+def archive_memory(memory_id: str) -> dict:
+    try:
+        return memory_service.archive(memory_id)
+    except ValueError as exc:
+        raise not_found("Memória") from exc
 
 
 @router.delete("/memory/{memory_id}")
 def delete_memory(memory_id: str) -> dict:
-    if not repository.row("SELECT id FROM memories WHERE id=?", (memory_id,)):
-        raise not_found("Memória")
-    with database() as connection:
-        connection.execute("DELETE FROM memories WHERE id=?", (memory_id,))
-        connection.execute("DELETE FROM memories_fts WHERE id=?", (memory_id,))
-    result = {"id": memory_id, "deleted": True}
-    repository.audit("manual_delete_memory", {"id": memory_id}, result, "success")
-    cognitive_graph_service.graph_changed("memory_deleted", memory_id)
-    return result
+    try:
+        return memory_service.delete(memory_id)
+    except ValueError as exc:
+        raise not_found("Memória") from exc
+
+
+@router.get("/memory-candidates")
+def candidates() -> list[dict]:
+    return memory_consolidator.list()
+
+
+@router.patch("/memory-candidates/{candidate_id}")
+def edit_candidate(candidate_id: str, payload: CandidatePatch) -> dict:
+    if not repository.row("SELECT id FROM memory_candidates WHERE id=? AND status='candidate'", (candidate_id,)):
+        raise not_found("Sugestão")
+    repository.execute(
+        "UPDATE memory_candidates SET content=?,category=?,memory_type=?,importance=?,confidence=?,updated_at=? WHERE id=?",
+        (payload.content, payload.category, payload.memory_type, payload.importance, payload.confidence, utc_now(), candidate_id),
+    )
+    return repository.row("SELECT * FROM memory_candidates WHERE id=?", (candidate_id,)) or {}
+
+
+@router.post("/memory-candidates/{candidate_id}/save")
+def save_candidate(candidate_id: str) -> dict:
+    try:
+        return memory_consolidator.save(candidate_id)
+    except ValueError as exc:
+        raise not_found("Sugestão") from exc
+
+
+@router.post("/memory-candidates/{candidate_id}/ignore")
+def ignore_candidate(candidate_id: str) -> dict:
+    return memory_consolidator.ignore(candidate_id)
 
 
 @router.get("/tasks")
 def list_tasks(status: str | None = None) -> list[dict]:
-    if status:
-        return repository.rows("SELECT * FROM tasks WHERE status=? ORDER BY updated_at DESC", (status,))
-    return repository.rows("SELECT * FROM tasks ORDER BY updated_at DESC")
+    return task_service.list(status)
+
+
+@router.get("/tasks/{task_id}")
+def get_task(task_id: str) -> dict:
+    item = repository.row("SELECT * FROM tasks WHERE id=?", (task_id,))
+    if not item:
+        raise not_found("Tarefa")
+    return item
 
 
 @router.post("/tasks")
 def create_task(payload: TaskInput) -> dict:
-    item_id, now = str(uuid.uuid4()), utc_now()
-    completed_at = now if payload.status == "done" else None
-    repository.execute(
-        "INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-        (item_id, payload.title, payload.description, payload.status, payload.priority, now, now, payload.due_at,
-         completed_at, payload.project, "manual", payload.estimated_minutes),
-    )
-    result = repository.row("SELECT * FROM tasks WHERE id=?", (item_id,)) or {}
-    repository.audit("manual_create_task", payload.model_dump(), result, "success")
-    cognitive_graph_service.graph_changed("task_created", item_id)
-    return result
+    return task_service.create(payload)
 
 
 @router.put("/tasks/{task_id}")
 def update_task(task_id: str, payload: TaskInput) -> dict:
-    if not repository.row("SELECT id FROM tasks WHERE id=?", (task_id,)):
-        raise not_found("Tarefa")
-    completed_at = utc_now() if payload.status == "done" else None
-    repository.execute(
-        "UPDATE tasks SET title=?,description=?,status=?,priority=?,updated_at=?,due_at=?,completed_at=?,project=?,estimated_minutes=? WHERE id=?",
-        (payload.title, payload.description, payload.status, payload.priority, utc_now(), payload.due_at,
-         completed_at, payload.project, payload.estimated_minutes, task_id),
-    )
-    result = repository.row("SELECT * FROM tasks WHERE id=?", (task_id,)) or {}
-    cognitive_graph_service.graph_changed("task_updated", task_id)
-    return result
+    try:
+        return task_service.update(task_id, payload)
+    except ValueError as exc:
+        raise not_found("Tarefa") from exc
 
 
 @router.delete("/tasks/{task_id}")
 def delete_task(task_id: str) -> dict:
-    if not repository.row("SELECT id FROM tasks WHERE id=?", (task_id,)):
-        raise not_found("Tarefa")
-    repository.execute("DELETE FROM tasks WHERE id=?", (task_id,))
-    result = {"id": task_id, "deleted": True}
-    repository.audit("manual_delete_task", {"id": task_id}, result, "success")
-    cognitive_graph_service.graph_changed("task_deleted", task_id)
-    return result
+    try:
+        return task_service.delete(task_id)
+    except ValueError as exc:
+        raise not_found("Tarefa") from exc
+
+
+def _process_document(job_id: str, document_id: str, original_name: str, path: Path, extension: str) -> None:
+    repository.execute("UPDATE processing_jobs SET status='running',updated_at=? WHERE id=?", (utc_now(), job_id))
+    result = index_document(document_id, original_name, path, extension)
+    repository.execute("UPDATE processing_jobs SET status=?,error=?,updated_at=? WHERE id=?", ("completed" if result["status"] == "ready" else "failed", result.get("error"), utc_now(), job_id))
+    repository.audit("index_document", {"document_id": document_id}, result, result["status"])
+    cognitive_graph_service.graph_changed("document_indexed", document_id)
 
 
 @router.get("/library")
 def library() -> list[dict]:
-    return repository.rows("SELECT * FROM documents ORDER BY created_at DESC")
+    return knowledge_service.list()
 
 
-@router.post("/library")
-async def upload_document(file: UploadFile = File(...)) -> dict:
+@router.get("/library/{document_id}")
+def get_document(document_id: str) -> dict:
+    item = repository.row("SELECT * FROM documents WHERE id=?", (document_id,))
+    if not item:
+        raise not_found("Documento")
+    item["tags"] = json.loads(item["tags"])
+    item["job"] = repository.row("SELECT * FROM processing_jobs WHERE entity_id=? ORDER BY created_at DESC LIMIT 1", (document_id,))
+    return item
+
+
+@router.post("/library", status_code=202)
+async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...)) -> dict:
     data = await file.read()
     try:
         extension = validate_upload(file.filename or "", len(data))
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    item_id, stored_name, now = str(uuid.uuid4()), f"{uuid.uuid4()}{extension}", utc_now()
+    item_id, job_id, stored_name, now = str(uuid.uuid4()), str(uuid.uuid4()), f"{uuid.uuid4()}{extension}", utc_now()
     path = safe_child_path(settings.library_path, stored_name)
     path.write_bytes(data)
     repository.execute(
-        "INSERT INTO documents VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        (item_id, stored_name, file.filename, extension[1:], len(data), "processing", "[]", "", now, 0, None),
+        "INSERT INTO documents (id,filename,original_name,type,size,status,tags,description,created_at,chunk_count,error,use_for_rag,collection) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (item_id, stored_name, file.filename, extension[1:], len(data), "queued", "[]", "", now, 0, None, 1, None),
     )
-    indexed = index_document(item_id, file.filename or stored_name, path, extension)
-    result = repository.row("SELECT * FROM documents WHERE id=?", (item_id,)) or indexed
-    repository.audit("upload_document", {"name": file.filename, "size": len(data)}, result, "success" if indexed["status"] == "ready" else "failed")
-    cognitive_graph_service.graph_changed("document_created", item_id)
-    return result
+    repository.execute("INSERT INTO processing_jobs VALUES (?,?,?,?,?,?,?)", (job_id, "document_index", item_id, "queued", None, now, now))
+    background_tasks.add_task(_process_document, job_id, item_id, file.filename or stored_name, path, extension)
+    cognitive_graph_service.graph_changed("document_queued", item_id)
+    return {**(repository.row("SELECT * FROM documents WHERE id=?", (item_id,)) or {}), "job_id": job_id}
+
+
+@router.put("/library/{document_id}")
+def update_document(document_id: str, payload: DocumentMetadataInput) -> dict:
+    try:
+        return knowledge_service.update(document_id, payload)
+    except ValueError as exc:
+        raise not_found("Documento") from exc
 
 
 @router.delete("/library/{document_id}")
@@ -210,9 +248,21 @@ def delete_document(document_id: str) -> dict:
 def activity() -> list[dict]:
     items = repository.rows("SELECT * FROM activity_log ORDER BY timestamp DESC LIMIT 200")
     for item in items:
-        item["input"] = json.loads(item.pop("input_json"))
-        item["result"] = json.loads(item.pop("result_json"))
+        item["input"] = json.loads(item.pop("input_json")); item["result"] = json.loads(item.pop("result_json"))
     return items
+
+
+@router.get("/learning")
+def learning() -> list[dict]:
+    return conversation_service.learning()
+
+
+@router.get("/agent-runs/{run_id}")
+def agent_run(run_id: str) -> dict:
+    item = agent_run_service.details(run_id)
+    if not item:
+        raise not_found("Agent run")
+    return item
 
 
 @router.get("/persona")
@@ -237,14 +287,52 @@ async def preview_persona(payload: PreviewInput) -> dict:
 
 @router.get("/usage")
 def usage() -> dict:
-    totals = repository.row("SELECT COUNT(*) AS inferences, COALESCE(SUM(input_tokens),0) AS input_tokens, COALESCE(SUM(output_tokens),0) AS output_tokens, COALESCE(SUM(estimated_cost),0) AS cost FROM usage_events") or {}
+    totals = repository.row("SELECT COUNT(*) AS inferences,COALESCE(SUM(input_tokens),0) AS input_tokens,COALESCE(SUM(output_tokens),0) AS output_tokens,COALESCE(SUM(estimated_cost),0) AS cost FROM usage_events") or {}
     return {"provider": "Ollama", "model": settings.model_name, "external_apis": 0, **totals}
 
 
 @router.get("/system")
 async def system() -> dict:
     system_tool = tool_registry.get("get_system_info").execute({})
-    return {**system_tool, "ollama": await provider.health(), "model": settings.model_name, "context_length": settings.context_length}
+    return {**system_tool, "ollama": await provider.health(), "model": settings.model_name, "context_length": settings.context_length, "embeddings": embedding_provider.health()}
+
+
+@router.get("/settings")
+def get_app_settings() -> dict:
+    values = {item["key"]: json.loads(item["value_json"]) for item in repository.rows("SELECT * FROM app_settings")}
+    return {"memory_behavior": values.get("memory_behavior", {"mode": "suggest"}), "model": {"name": settings.model_name, "context_length": settings.context_length}, "cognitive_core": {"max_relationship_degree": 4}, "privacy": {"architecture": "local", "telemetry": False}, "data": {"database": str(settings.database_path)}, "backup": {"directory": str(settings.backup_path)}, "system": {"max_agent_cycles": settings.max_agent_cycles}}
+
+
+@router.put("/settings/memory")
+def update_memory_behavior(payload: MemoryBehaviorInput) -> dict:
+    repository.execute("INSERT OR REPLACE INTO app_settings VALUES (?,?,?)", ("memory_behavior", payload.model_dump_json(), utc_now()))
+    return payload.model_dump()
+
+
+@router.get("/onboarding")
+async def onboarding() -> dict:
+    llm = await provider.health()
+    saved = repository.row("SELECT value_json FROM app_settings WHERE key='onboarding'")
+    profile = repository.row("SELECT value_json FROM app_settings WHERE key='user_profile'")
+    candidates = []
+    for path in {PROJECT_ROOT / "data", RUNTIME_ROOT / "data"}:
+        if path.resolve() != settings.database_path.parents[1].resolve() and path.exists():
+            candidates.append({"path": str(path), "available": True})
+    return {"completed": bool(saved and json.loads(saved["value_json"]).get("completed")), "user_name": json.loads(profile["value_json"]).get("name", "") if profile else "", "backend": "online", "ollama": llm.get("status", "offline"), "model_available": bool(llm.get("model_available") or llm.get("status") == "ok"), "model": settings.model_name, "gpu_detected": Path("C:/Windows/System32/nvidia-smi.exe").exists(), "memory_behavior": get_app_settings()["memory_behavior"], "migration_candidates": candidates, "requires_account": False, "external_transfer": False}
+
+
+@router.post("/onboarding/complete")
+def complete_onboarding(payload: OnboardingInput) -> dict:
+    name = " ".join(payload.user_name.split())[:120]
+    if not name:
+        raise HTTPException(422, "Informe como o Jarvis deve chamar você.")
+    if payload.memory_mode not in {"disabled", "suggest", "auto"}:
+        raise HTTPException(422, "Comportamento de memória inválido.")
+    now = utc_now()
+    repository.execute("INSERT OR REPLACE INTO app_settings VALUES (?,?,?)", ("user_profile", json.dumps({"name": name}, ensure_ascii=False), now))
+    repository.execute("INSERT OR REPLACE INTO app_settings VALUES (?,?,?)", ("memory_behavior", json.dumps({"mode": payload.memory_mode}), now))
+    repository.execute("INSERT OR REPLACE INTO app_settings VALUES (?,?,?)", ("onboarding", json.dumps({"completed": True}), now))
+    return {"completed": True, "user_name": name, "memory_mode": payload.memory_mode}
 
 
 @router.get("/devices")
@@ -262,20 +350,19 @@ def global_search(query: str) -> list[dict]:
     query = query.strip()
     if not query:
         return []
-    pattern = f"%{query}%"
-    results: list[dict[str, Any]] = []
-    for item in repository.rows("SELECT id, content AS title, category AS subtitle FROM memories WHERE content LIKE ? LIMIT 8", (pattern,)):
-        results.append({"type": "memory", **item})
-    for item in repository.rows("SELECT id, title, status AS subtitle FROM tasks WHERE title LIKE ? OR description LIKE ? LIMIT 8", (pattern, pattern)):
-        results.append({"type": "task", **item})
-    for item in repository.rows("SELECT id, title, updated_at AS subtitle FROM conversations WHERE title LIKE ? LIMIT 8", (pattern,)):
-        results.append({"type": "conversation", **item})
-    for item in search_documents(query, 8):
-        results.append({"type": "document", "id": item["document_id"], "title": item["filename"], "subtitle": item["relevant_text"][:180]})
+    pattern = f"%{query}%"; results: list[dict[str, Any]] = []
+    for item in repository.rows("SELECT id,content AS title,category AS subtitle FROM memories WHERE status='active' AND content LIKE ? LIMIT 8", (pattern,)):
+        results.append({"type": "memory", "path": f"/memory/{item['id']}", **item})
+    for item in repository.rows("SELECT id,title,status AS subtitle FROM tasks WHERE title LIKE ? OR description LIKE ? LIMIT 8", (pattern, pattern)):
+        results.append({"type": "task", "path": f"/tasks/{item['id']}", **item})
+    for item in repository.rows("SELECT id,title,updated_at AS subtitle FROM conversations WHERE title LIKE ? LIMIT 8", (pattern,)):
+        results.append({"type": "conversation", "path": f"/chat/{item['id']}", **item})
+    for item in knowledge_service.search(query, 8):
+        results.append({"type": "document", "path": f"/library/{item['document_id']}", "id": item["document_id"], "title": item["filename"], "subtitle": item["relevant_text"][:180]})
     return results
 
 
 @router.get("/export")
 def export_data() -> dict:
-    tables = ("conversations", "messages", "memories", "notes", "tasks", "documents", "activity_log", "usage_events")
+    tables = ("conversations", "messages", "conversation_summaries", "message_feedback", "memories", "memory_candidates", "notes", "tasks", "documents", "activity_log", "agent_runs", "agent_run_steps", "usage_events")
     return {table: repository.rows(f"SELECT * FROM {table}") for table in tables}

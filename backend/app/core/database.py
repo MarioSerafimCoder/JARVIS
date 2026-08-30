@@ -100,14 +100,63 @@ CREATE TABLE IF NOT EXISTS memory_relationships (
 );
 CREATE INDEX IF NOT EXISTS idx_memory_relationships_source ON memory_relationships(source_memory_id);
 CREATE INDEX IF NOT EXISTS idx_memory_relationships_target ON memory_relationships(target_memory_id);
+CREATE TABLE IF NOT EXISTS memory_embeddings (
+  memory_id TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL, model TEXT NOT NULL, dimensions INTEGER NOT NULL,
+  vector_json TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS memory_candidates (
+  id TEXT PRIMARY KEY, content TEXT NOT NULL, category TEXT NOT NULL, memory_type TEXT NOT NULL,
+  confidence REAL NOT NULL, importance INTEGER NOT NULL, source_type TEXT NOT NULL,
+  source_reference TEXT, source_message_id TEXT, status TEXT NOT NULL DEFAULT 'candidate',
+  dedupe_status TEXT NOT NULL DEFAULT 'new', related_memory_id TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS conversation_summaries (
+  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+  summary TEXT NOT NULL, message_count INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS message_feedback (
+  id TEXT PRIMARY KEY, message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  rating INTEGER NOT NULL CHECK(rating IN (-1,1)), correction TEXT,
+  created_at TEXT NOT NULL, UNIQUE(message_id)
+);
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  status TEXT NOT NULL, step_count INTEGER NOT NULL DEFAULT 0, max_steps INTEGER NOT NULL DEFAULT 5,
+  messages_json TEXT NOT NULL, context_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT, error TEXT
+);
+CREATE TABLE IF NOT EXISTS agent_run_steps (
+  id TEXT PRIMARY KEY, agent_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+  step_index INTEGER NOT NULL, kind TEXT NOT NULL, tool_name TEXT, status TEXT NOT NULL,
+  input_json TEXT NOT NULL DEFAULT '{}', result_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_run_steps_run ON agent_run_steps(agent_run_id, step_index);
+CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS processing_jobs (
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL, entity_id TEXT NOT NULL, status TEXT NOT NULL,
+  error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
 """
 
 
 def initialize_database(path: Path | None = None) -> None:
     with database(path) as connection:
         connection.executescript(SCHEMA)
+        migration_4_needed = connection.execute("SELECT 1 FROM schema_version WHERE version=4").fetchone() is None
         _add_column(connection, "messages", "generation_status", "TEXT NOT NULL DEFAULT 'complete'")
         _add_column(connection, "pending_actions", "executed_at", "TEXT")
+        _add_column(connection, "pending_actions", "agent_run_id", "TEXT")
+        _add_column(connection, "memories", "memory_type", "TEXT NOT NULL DEFAULT 'semantic'")
+        _add_column(connection, "memories", "status", "TEXT NOT NULL DEFAULT 'active'")
+        _add_column(connection, "memories", "confidence", "REAL NOT NULL DEFAULT 1.0")
+        _add_column(connection, "memories", "supersedes_id", "TEXT")
+        _add_column(connection, "memories", "source_message_id", "TEXT")
+        _add_column(connection, "documents", "use_for_rag", "INTEGER NOT NULL DEFAULT 1")
+        _add_column(connection, "documents", "collection", "TEXT")
         connection.execute(
             "INSERT OR IGNORE INTO schema_version VALUES (?,?,?)",
             (1, utc_now(), "initial schema"),
@@ -120,6 +169,17 @@ def initialize_database(path: Path | None = None) -> None:
             "INSERT OR IGNORE INTO schema_version VALUES (?,?,?)",
             (3, utc_now(), "cognitive core memory relationships"),
         )
+        connection.execute(
+            "INSERT OR IGNORE INTO schema_version VALUES (?,?,?)",
+            (4, utc_now(), "intelligence engine, memory 2.0, feedback and agent runs"),
+        )
+        if migration_4_needed:
+            connection.execute(
+                "UPDATE memories SET memory_type=CASE category "
+                "WHEN 'preference' THEN 'preference' WHEN 'person' THEN 'person' WHEN 'project' THEN 'project' "
+                "WHEN 'decision' THEN 'decision' WHEN 'routine' THEN 'procedural' ELSE 'semantic' END "
+                "WHERE memory_type IS NULL OR memory_type='semantic'"
+            )
 
 
 def _add_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:

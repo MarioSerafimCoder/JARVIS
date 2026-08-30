@@ -13,6 +13,7 @@ from app.core.cognitive_state import CognitiveEventType, cognitive_state_service
 from app.core.database import database, utc_now
 from app.core.retrieval import normalize_query
 from app.services.repository import repository
+from app.services.embeddings import cosine_similarity
 
 
 CATEGORY_CLUSTERS = {
@@ -97,15 +98,34 @@ class DeterministicRelationshipProvider(GraphRelationshipProvider):
 
 
 class EmbeddingRelationshipProvider(GraphRelationshipProvider):
-    name = "embedding_future"
+    name = "local_embedding_with_deterministic_fallback"
 
     def relationships(self, memories: list[dict[str, Any]], max_connections: int = 4) -> list[dict[str, Any]]:
-        raise NotImplementedError("Embeddings estão preparados arquiteturalmente, mas não ativos nesta fase.")
+        vectors = {row["memory_id"]: (json.loads(row["vector_json"]), row["model"]) for row in repository.rows("SELECT memory_id,vector_json,model FROM memory_embeddings")}
+        scored: list[dict[str, Any]] = []
+        for index, source in enumerate(memories):
+            if source["id"] not in vectors:
+                continue
+            for target in memories[index + 1:]:
+                if target["id"] not in vectors:
+                    continue
+                similarity = cosine_similarity(vectors[source["id"]][0], vectors[target["id"]][0])
+                if similarity < .72:
+                    continue
+                scored.append({"source": f"memory:{source['id']}", "target": f"memory:{target['id']}", "type": "semantic_embedding", "weight": round(similarity, 4), "evidence": {"similarity": round(similarity, 4), "model": vectors[source["id"]][1], "reason": "similaridade semântica medida localmente"}})
+        if not scored:
+            return DeterministicRelationshipProvider().relationships(memories, max_connections)
+        degree: dict[str, int] = defaultdict(int); selected = []
+        for edge in sorted(scored, key=lambda item: -item["weight"]):
+            if degree[edge["source"]] >= max_connections or degree[edge["target"]] >= max_connections:
+                continue
+            degree[edge["source"]] += 1; degree[edge["target"]] += 1; selected.append(edge)
+        return selected
 
 
 class CognitiveGraphService:
     def __init__(self, relationship_provider: GraphRelationshipProvider | None = None) -> None:
-        self.relationship_provider = relationship_provider or DeterministicRelationshipProvider()
+        self.relationship_provider = relationship_provider or EmbeddingRelationshipProvider()
 
     @staticmethod
     def _freshness(item: dict[str, Any]) -> float:
@@ -117,7 +137,7 @@ class CognitiveGraphService:
         return round(max(0.2, 1 / (1 + age_days / 45)), 4)
 
     def build(self, tool_catalog: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-        memories = repository.rows("SELECT * FROM memories ORDER BY id")
+        memories = repository.rows("SELECT * FROM memories WHERE status='active' ORDER BY id")
         documents = repository.rows("SELECT id,original_name,type,status,chunk_count,created_at FROM documents ORDER BY id")
         tasks = repository.rows("SELECT id,title,description,status,priority,due_at,project,created_at,updated_at FROM tasks WHERE status NOT IN ('done','cancelled') ORDER BY id")
         nodes: list[dict[str, Any]] = [{"id":"core:jarvis","kind":"core","cluster":"core","label":"JARVIS","position":{"x":0.0,"y":0.0,"z":0.0},"size":2.2,"intensity":1.0,"metadata":{"role":"cognitive_core"}}]
@@ -132,8 +152,8 @@ class CognitiveGraphService:
         for tool in sorted(tool_catalog or [], key=lambda item:item["name"]):
             nodes.append({"id":f"tool:{tool['name']}","entity_id":tool["name"],"kind":"tool","cluster":"tools","label":tool["name"],"position":stable_position(tool["name"],"tools",5.5),"size":0.34,"intensity":0.65,"metadata":tool})
         computed = self.relationship_provider.relationships(memories)
-        stored = repository.rows("SELECT * FROM memory_relationships ORDER BY weight DESC, source_memory_id, target_memory_id")
-        candidates = computed + [{"source":f"memory:{item['source_memory_id']}","target":f"memory:{item['target_memory_id']}","type":item["relationship_type"],"weight":item["weight"],"evidence":json.loads(item["evidence_json"])} for item in stored]
+        stored = repository.rows("SELECT r.* FROM memory_relationships r JOIN memories s ON s.id=r.source_memory_id JOIN memories t ON t.id=r.target_memory_id WHERE s.status='active' AND t.status='active' ORDER BY r.weight DESC,r.source_memory_id,r.target_memory_id")
+        candidates = [{**edge, "connection_class": "memory_relationship"} for edge in computed] + [{"source":f"memory:{item['source_memory_id']}","target":f"memory:{item['target_memory_id']}","type":item["relationship_type"],"weight":item["weight"],"evidence":json.loads(item["evidence_json"]),"connection_class":"memory_relationship"} for item in stored]
         degree: dict[str,int] = defaultdict(int); seen: set[tuple[str,str,str]] = set(); edges: list[dict[str,Any]] = []
         for edge in sorted(candidates,key=lambda item:(-item["weight"],item["source"],item["target"],item["type"])):
             key=(edge["source"],edge["target"],edge["type"])
@@ -141,16 +161,20 @@ class CognitiveGraphService:
             seen.add(key);degree[edge["source"]]+=1;degree[edge["target"]]+=1;edges.append(edge)
         for node in nodes:
             if node["kind"] in {"document","task","tool"}:
-                edges.append({"source":"core:jarvis","target":node["id"],"type":f"structural_{node['kind']}","weight":0.35,"evidence":{"reason":f"{node['kind']} pertence ao subsistema local do Jarvis"}})
+                connection_class = "tool_connection" if node["kind"] == "tool" else "structural_connection"
+                edges.append({"source":"core:jarvis","target":node["id"],"type":f"structural_{node['kind']}","weight":0.18 if node["kind"] == "tool" else 0.28,"connection_class":connection_class,"evidence":{"reason":f"{node['kind']} pertence ao subsistema local do Jarvis"}})
         snapshot = cognitive_state_service.snapshot()
         counts = defaultdict(int)
         for node in nodes: counts[node["kind"]] += 1
-        return {"nodes":nodes,"edges":edges,"clusters":[{"id":name,"center":{"x":center[0],"y":center[1],"z":center[2]},"count":sum(1 for node in nodes if node["cluster"]==name)} for name,center in CLUSTER_CENTERS.items()],"state":snapshot,"stats":{"nodes":len(nodes),"edges":len(edges),"memories":counts["memory"],"documents":counts["document"],"tasks":counts["task"],"tools":counts["tool"],"relationship_provider":self.relationship_provider.name}}
+        memory_relationships = sum(1 for edge in edges if edge.get("connection_class") == "memory_relationship")
+        structural_connections = sum(1 for edge in edges if edge.get("connection_class") == "structural_connection")
+        tool_connections = sum(1 for edge in edges if edge.get("connection_class") == "tool_connection")
+        return {"nodes":nodes,"edges":edges,"clusters":[{"id":name,"center":{"x":center[0],"y":center[1],"z":center[2]},"count":sum(1 for node in nodes if node["cluster"]==name)} for name,center in CLUSTER_CENTERS.items()],"state":snapshot,"stats":{"nodes":len(nodes),"edges":len(edges),"memories":counts["memory"],"documents":counts["document"],"tasks":counts["task"],"tools":counts["tool"],"memory_relationships":memory_relationships,"structural_connections":structural_connections,"tool_connections":tool_connections,"relationship_provider":self.relationship_provider.name}}
 
     def memory_created(self, memory_id: str) -> None:
         memory = repository.row("SELECT * FROM memories WHERE id=?", (memory_id,))
         if not memory: return
-        relationships = self.relationship_provider.relationships(repository.rows("SELECT * FROM memories ORDER BY id"))
+        relationships = self.relationship_provider.relationships(repository.rows("SELECT * FROM memories WHERE status='active' ORDER BY id"))
         relevant = [edge for edge in relationships if edge["source"]==f"memory:{memory_id}" or edge["target"]==f"memory:{memory_id}"]
         with database() as connection:
             for edge in relevant:

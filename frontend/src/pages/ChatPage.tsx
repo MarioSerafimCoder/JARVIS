@@ -1,86 +1,64 @@
-import { FormEvent, useEffect, useRef, useState } from 'react'
-import { Bot, Check, Copy, MessageSquarePlus, Mic, Pencil, RotateCcw, Send, Square, Trash2 } from 'lucide-react'
-import { API_URL, api, jsonRequest } from '../services/api'
-import type { ChatResult, ContextEvidence, Conversation, Message, StreamEvent, ToolAction } from '../types'
+import { FormEvent, ReactNode, useEffect, useRef, useState } from 'react'
+import { Bot, Check, Copy, MessageSquarePlus, Mic, Pencil, RotateCcw, Send, Square, ThumbsDown, ThumbsUp, Trash2 } from 'lucide-react'
 import { Badge, Empty, formatDate, useLoad } from '../components/Common'
+import { API_URL, api, jsonRequest } from '../services/api'
+import type { ChatResult, ContextEvidence, Conversation, MemoryCandidate, Message, Page, StreamEvent, ToolAction } from '../types'
 
 const localMessage = (role: Message['role'], content: string, status: Message['generation_status'] = 'complete'): Message => ({ id: crypto.randomUUID(), role, content, generation_status: status, created_at: new Date().toISOString() })
 
-export function ChatPage({ setContext }: { context: ContextEvidence; setContext: (value: ContextEvidence) => void }) {
+function SafeMarkdown({text}:{text:string}){
+  const lines=text.split('\n');const blocks:ReactNode[]=[];let index=0
+  while(index<lines.length){
+    const line=lines[index]
+    if(line.startsWith('```')){const language=line.slice(3);const code=[];index++;while(index<lines.length&&!lines[index].startsWith('```'))code.push(lines[index++]);blocks.push(<pre key={index}><code data-language={language}>{code.join('\n')}</code></pre>);index++;continue}
+    if(index+1<lines.length&&line.includes('|')&&/^\s*\|?\s*:?-+/.test(lines[index+1])){const headers=line.split('|').map(x=>x.trim()).filter(Boolean);index+=2;const rows:string[][]=[];while(index<lines.length&&lines[index].includes('|'))rows.push(lines[index++].split('|').map(x=>x.trim()).filter(Boolean));blocks.push(<table key={index}><thead><tr>{headers.map((x,i)=><th key={i}>{x}</th>)}</tr></thead><tbody>{rows.map((row,r)=><tr key={r}>{row.map((x,c)=><td key={c}>{x}</td>)}</tr>)}</tbody></table>);continue}
+    if(/^#{1,3}\s/.test(line)){const level=line.match(/^#+/)![0].length;const value=line.slice(level).trim();blocks.push(level===1?<h2 key={index}>{value}</h2>:level===2?<h3 key={index}>{value}</h3>:<h4 key={index}>{value}</h4>);index++;continue}
+    if(/^\s*[-*]\s+/.test(line)){const items=[];while(index<lines.length&&/^\s*[-*]\s+/.test(lines[index]))items.push(lines[index++].replace(/^\s*[-*]\s+/,''));blocks.push(<ul key={index}>{items.map((x,i)=><li key={i}>{x}</li>)}</ul>);continue}
+    if(/^\s*\d+\.\s+/.test(line)){const items=[];while(index<lines.length&&/^\s*\d+\.\s+/.test(lines[index]))items.push(lines[index++].replace(/^\s*\d+\.\s+/,''));blocks.push(<ol key={index}>{items.map((x,i)=><li key={i}>{x}</li>)}</ol>);continue}
+    if(line.trim())blocks.push(<p key={index}>{line}</p>);index++
+  }
+  return <div className="safe-markdown">{blocks}</div>
+}
+
+function contextLabel(context?:ContextEvidence){return `${context?.memories?.length||0} memórias · ${context?.documents?.length||0} documentos · ${context?.actions?.length||0} tools`}
+const ACTION_LABELS:Record<string,string>={create_task:'CRIAR TAREFA',update_task:'ATUALIZAR TAREFA',complete_task:'CONCLUIR TAREFA',save_memory:'SALVAR MEMÓRIA',delete_memory:'EXCLUIR MEMÓRIA',create_note:'CRIAR NOTA'}
+function ActionCard({action,confirm}:{action:ToolAction;confirm:(id:string,approved:boolean)=>void}){const[details,setDetails]=useState(false);const title=String(action.input.title||action.input.content||action.input.id||'Ação local');const due=action.input.due_at?formatDate(String(action.input.due_at)):'';return <div className="confirmation"><span className="eyebrow">{ACTION_LABELS[action.tool]||action.tool.replaceAll('_',' ').toUpperCase()}</span><h3>{title}</h3>{due&&<p>{due}</p>}<button className="details-link" onClick={()=>setDetails(!details)}>Ver detalhes</button>{details&&<pre>{JSON.stringify(action.input,null,2)}</pre>}<div><button onClick={()=>confirm(action.action_id,false)}>Cancelar</button><button className="primary" onClick={()=>confirm(action.action_id,true)}><Check/>Confirmar</button></div></div>}
+
+export function ChatPage({ setContext, initialConversationId, navigate }: { context: ContextEvidence; setContext: (value: ContextEvidence) => void; initialConversationId?:string; navigate:(page:Page,id?:string)=>void }) {
   const [conversations, refreshConversations] = useLoad<Conversation[]>('/conversations', [])
   const [conversationId, setConversationId] = useState<string>()
-  const [messages, setMessages] = useState<Message[]>([])
-  const [pending, setPending] = useState<ToolAction[]>([])
-  const [input, setInput] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [lastPrompt, setLastPrompt] = useState('')
-  const [error, setError] = useState('')
-  const controller = useRef<AbortController | undefined>(undefined)
-  const bottom = useRef<HTMLDivElement>(null)
-  useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, busy, pending])
+  const [messages, setMessages] = useState<Message[]>([]);const [pending, setPending] = useState<ToolAction[]>([]);const[candidates,setCandidates]=useState<MemoryCandidate[]>([])
+  const [input, setInput] = useState('');const [busy, setBusy] = useState(false);const [lastPrompt, setLastPrompt] = useState('');const [error, setError] = useState('')
+  const controller = useRef<AbortController | undefined>(undefined);const bottom = useRef<HTMLDivElement>(null)
+  useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, busy, pending,candidates])
 
-  const newConversation = () => { controller.current?.abort(); setConversationId(undefined); setMessages([]); setPending([]); setContext({}); setError('') }
-  const openConversation = async (id: string) => {
-    const data = await api<Conversation & { messages: Message[] }>(`/conversations/${id}`)
-    setConversationId(id); setMessages(data.messages); setContext(data.messages.at(-1)?.context || {})
-    setPending((await api<ToolAction[]>('/tools/pending')).filter(action => action.conversation_id === id))
-  }
-  const rename = async (item: Conversation) => {
-    const title = window.prompt('Novo título da conversa:', item.title)?.trim()
-    if (title) { await api(`/conversations/${item.id}`, jsonRequest('PATCH', { title })); refreshConversations() }
-  }
-  const remove = async (item: Conversation) => {
-    if (!window.confirm(`Excluir “${item.title}” e todo o histórico?`)) return
-    await api(`/conversations/${item.id}`, { method: 'DELETE' }); if (conversationId === item.id) newConversation(); refreshConversations()
-  }
+  const newConversation = () => { controller.current?.abort(); setConversationId(undefined);setMessages([]);setPending([]);setCandidates([]);setContext({});setError('');navigate('chat') }
+  const openConversation = async (id: string) => {const data=await api<Conversation&{messages:Message[]}>(`/conversations/${id}`);setConversationId(id);setMessages(data.messages);setContext(data.messages.filter(x=>x.role==='assistant').at(-1)?.context||{});setPending((await api<ToolAction[]>('/tools/pending')).filter(action=>action.conversation_id===id));navigate('chat',id)}
+  useEffect(()=>{if(initialConversationId&&initialConversationId!==conversationId)void openConversation(initialConversationId)},[initialConversationId])
+  const rename=async(item:Conversation)=>{const title=window.prompt('Novo título da conversa:',item.title)?.trim();if(title){await api(`/conversations/${item.id}`,jsonRequest('PATCH',{title}));refreshConversations()}}
+  const remove=async(item:Conversation)=>{if(!window.confirm(`Excluir “${item.title}” e todo o histórico?`))return;await api(`/conversations/${item.id}`,{method:'DELETE'});if(conversationId===item.id)newConversation();refreshConversations()}
 
-  const stream = async (prompt: string) => {
-    if (!prompt.trim() || busy) return
-    setLastPrompt(prompt); setError(''); setBusy(true); setPending([])
-    setMessages(current => [...current, localMessage('user', prompt), localMessage('assistant', '', 'complete')])
-    const aborter = new AbortController(); controller.current = aborter
-    try {
-      const response = await fetch(`${API_URL}/chat/stream`, { ...jsonRequest('POST', { message: prompt, conversation_id: conversationId }), signal: aborter.signal })
-      if (!response.ok || !response.body) throw new Error(`Não foi possível iniciar a resposta (${response.status}).`)
-      const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = ''
-      while (true) {
-        const { value, done } = await reader.read(); if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const blocks = buffer.split('\n\n'); buffer = blocks.pop() || ''
-        for (const block of blocks) {
-          const line = block.split('\n').find(item => item.startsWith('data: ')); if (!line) continue
-          const event = JSON.parse(line.slice(6)) as StreamEvent
-          if (event.type === 'start') { setConversationId(event.conversation_id); setContext(event.context || {}) }
-          if (event.type === 'token' && event.content) setMessages(current => current.map((item, index) => index === current.length - 1 ? { ...item, content: item.content + event.content } : item))
-          if (event.type === 'action' && event.action) setPending(current => [...current, event.action!])
-          if (event.type === 'done') { setContext(event.context || {}); setPending((event.actions || []).filter(action => action.status === 'pending_confirmation')); refreshConversations() }
-          if (event.type === 'error') throw new Error(event.error?.message || 'Falha durante a geração.')
-        }
-      }
-    } catch (err) {
-      if (aborter.signal.aborted) setMessages(current => current.map((item, index) => index === current.length - 1 ? { ...item, generation_status: 'cancelled', content: item.content || 'Geração interrompida.' } : item))
-      else { const message = err instanceof Error ? err.message : String(err); setError(message); setMessages(current => current.filter((_, index) => index !== current.length - 1)) }
-    } finally { setBusy(false); controller.current = undefined }
-  }
-  const send = (event: FormEvent) => { event.preventDefault(); const prompt = input.trim(); if (!prompt) return; setInput(''); void stream(prompt) }
-  const stop = () => controller.current?.abort()
-  const confirm = async (actionId: string, approved: boolean) => {
-    setError('')
-    try {
-      const result = await api<ChatResult & { status: string }>(`/tools/${actionId}/confirm`, jsonRequest('POST', { approved }))
-      setPending(current => current.filter(item => item.action_id !== actionId)); setMessages(current => [...current, localMessage('assistant', result.message)]); setContext(result.context); refreshConversations()
-    } catch (err) { setError(err instanceof Error ? err.message : String(err)) }
-  }
+  const stream=async(prompt:string)=>{if(!prompt.trim()||busy)return;setLastPrompt(prompt);setError('');setBusy(true);setPending([]);setCandidates([]);setMessages(current=>[...current,localMessage('user',prompt),localMessage('assistant','')]);const aborter=new AbortController();controller.current=aborter
+    try{const response=await fetch(`${API_URL}/chat/stream`,{...jsonRequest('POST',{message:prompt,conversation_id:conversationId}),signal:aborter.signal});if(!response.ok||!response.body)throw new Error(`Não foi possível iniciar a resposta (${response.status}).`);const reader=response.body.getReader(),decoder=new TextDecoder();let buffer=''
+      while(true){const{value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});const blocks=buffer.split('\n\n');buffer=blocks.pop()||'';for(const block of blocks){const line=block.split('\n').find(item=>item.startsWith('data: '));if(!line)continue;const event=JSON.parse(line.slice(6)) as StreamEvent
+        if(event.type==='start'){setConversationId(event.conversation_id);setContext(event.context||{});if(event.conversation_id)navigate('chat',event.conversation_id)}
+        if(event.type==='token'&&event.content)setMessages(current=>current.map((item,index)=>index===current.length-1?{...item,content:item.content+event.content!}:item))
+        if(event.type==='action'&&event.action)setPending(current=>[...current,event.action!])
+        if(event.type==='done'){setContext(event.context||{});setPending((event.actions||[]).filter(action=>action.status==='pending_confirmation'));setCandidates(event.memory_candidates||[]);setMessages(current=>current.map((item,index)=>index===current.length-1?{...item,id:event.message_id||item.id,context:event.context}:item));refreshConversations()}
+        if(event.type==='error')throw new Error(event.error?.message||'Falha durante a geração.')
+      }}
+    }
+    catch(err){if(aborter.signal.aborted)setMessages(current=>current.map((item,index)=>index===current.length-1?{...item,generation_status:'cancelled',content:item.content||'Geração interrompida.'}:item));else{const message=err instanceof Error?err.message:String(err);setError(message);setMessages(current=>current.filter((_,index)=>index!==current.length-1))}}
+    finally{setBusy(false);controller.current=undefined}}
+  const send=(event:FormEvent)=>{event.preventDefault();const prompt=input.trim();if(!prompt)return;setInput('');void stream(prompt)}
+  const confirm=async(actionId:string,approved:boolean)=>{setError('');try{const result=await api<ChatResult&{status:string}>(`/tools/${actionId}/confirm`,jsonRequest('POST',{approved}));setPending((result.actions||[]).filter(item=>item.status==='pending_confirmation'));const msg=localMessage('assistant',result.message);msg.id=result.message_id||msg.id;msg.context=result.context;setMessages(current=>[...current,msg]);setContext(result.context);refreshConversations()}catch(err){setError(err instanceof Error?err.message:String(err))}}
+  const rate=async(message:Message,rating:-1|1)=>{let correction:string|undefined;if(rating===-1)correction=window.prompt('Como o Jarvis deveria ter respondido? (opcional)')||undefined;await api(`/conversations/messages/${message.id}/feedback`,jsonRequest('POST',{rating,correction}));setMessages(current=>current.map(item=>item.id===message.id?{...item,feedback:{rating,correction}}:item))}
+  const candidateAction=async(item:MemoryCandidate,action:'save'|'ignore'|'edit')=>{if(action==='edit'){const content=window.prompt('Edite a memória sugerida:',item.content)?.trim();if(!content)return;await api(`/memory-candidates/${item.id}`,jsonRequest('PATCH',{...item,content}))}else await api(`/memory-candidates/${item.id}/${action}`,{method:'POST'});setCandidates(current=>current.filter(candidate=>candidate.id!==item.id))}
 
-  return <div className="chat-layout">
-    <aside className="conversation-list"><div className="panel-head"><strong>Conversas</strong><button title="Nova conversa" className="icon-button" onClick={newConversation}><MessageSquarePlus/></button></div>{conversations.length ? conversations.map(item => <div className={`conversation-item ${conversationId === item.id ? 'active' : ''}`} key={item.id}><button onClick={() => void openConversation(item.id)}><strong>{item.title}</strong><small>{formatDate(item.updated_at)}</small></button><span><button title="Renomear" onClick={() => void rename(item)}><Pencil/></button><button title="Excluir" onClick={() => void remove(item)}><Trash2/></button></span></div>) : <Empty title="Sem conversas" body="Comece uma nova conversa."/>}</aside>
-    <main className="chat-main"><header className="chat-head"><div><span className="eyebrow">MODELO LOCAL</span><strong>Qwen 3.5 4B</strong></div><Badge tone="success">Ollama</Badge></header>
-      <div className="messages">{!messages.length && <div className="welcome"><div className="orb"><Bot/></div><h1>Em que posso ajudar?</h1><p>Conversa local, memória separada e ações verificáveis.</p></div>}
-        {messages.map(message => <article key={message.id} className={`message ${message.role}`}><span>{message.role === 'user' ? 'VOCÊ' : message.role === 'assistant' ? 'JARVIS DISSE' : 'SISTEMA'} · {formatDate(message.created_at)}</span><p>{message.content}</p>{message.role === 'assistant' && message.content && <div className="message-actions"><button title="Copiar resposta" onClick={() => void navigator.clipboard.writeText(message.content)}><Copy/> Copiar</button>{message.generation_status === 'cancelled' && <Badge tone="warning">Interrompida</Badge>}</div>}</article>)}
-        {pending.map(action => <div className="confirmation" key={action.action_id}><span className="eyebrow">JARVIS QUER EXECUTAR</span><h3>{action.tool}</h3><pre>{JSON.stringify(action.input, null, 2)}</pre><div><button onClick={() => void confirm(action.action_id, false)}>Cancelar</button><button className="primary" onClick={() => void confirm(action.action_id, true)}><Check/>Confirmar</button></div></div>)}
-        {busy && <div className="typing"><i/><i/><i/></div>}{error && <div className="chat-error"><span>{error}</span><button onClick={() => void stream(lastPrompt)}><RotateCcw/>Tentar novamente</button></div>}<div ref={bottom}/>
-      </div>
-      <form className="composer" onSubmit={send}><button disabled type="button" className="icon-button" title="Voz será disponibilizada em uma fase futura"><Mic/></button><textarea value={input} onChange={event => setInput(event.target.value)} placeholder="Fale com o Jarvis local…" rows={1} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }}/>{busy ? <button type="button" className="send stop" title="Parar geração" onClick={stop}><Square/></button> : <button className="send" disabled={!input.trim()} title="Enviar"><Send/></button>}</form>
-    </main>
-  </div>
+  return <div className="chat-layout"><aside className="conversation-list"><div className="panel-head"><strong>Conversas</strong><button title="Nova conversa" className="icon-button" onClick={newConversation}><MessageSquarePlus/></button></div>{conversations.length?conversations.map(item=><div className={`conversation-item ${conversationId===item.id?'active':''}`} key={item.id}><button onClick={()=>void openConversation(item.id)}><strong>{item.title}</strong><small>{formatDate(item.updated_at)}</small></button><span><button title="Renomear" onClick={()=>void rename(item)}><Pencil/></button><button title="Excluir" onClick={()=>void remove(item)}><Trash2/></button></span></div>):<Empty title="Sem conversas" body="Comece uma nova conversa."/>}</aside>
+    <main className="chat-main"><header className="chat-head"><div><span className="eyebrow">MODELO LOCAL</span><strong>Qwen 3.5 4B · agent loop</strong></div><Badge tone="success">Ollama</Badge></header><div className="messages">{!messages.length&&<div className="welcome"><div className="orb"><Bot/></div><h1>Em que posso ajudar?</h1><p>Conversa local, memória sugerida e ações verificáveis.</p></div>}
+      {messages.map(message=><article key={message.id} className={`message ${message.role}`}><span>{message.role==='user'?'VOCÊ':message.role==='assistant'?'JARVIS DISSE':'SISTEMA'} · {formatDate(message.created_at)}</span>{message.role==='assistant'?<SafeMarkdown text={message.content}/>:<p>{message.content}</p>}{message.role==='assistant'&&message.content&&<div className="message-actions"><button onClick={()=>void navigator.clipboard.writeText(message.content)}><Copy/>Copiar</button><button className={message.feedback?.rating===1?'rated':''} onClick={()=>void rate(message,1)}><ThumbsUp/></button><button className={message.feedback?.rating===-1?'rated':''} onClick={()=>void rate(message,-1)}><ThumbsDown/></button>{message.context&&<button onClick={()=>setContext(message.context!)}>Contexto utilizado · {contextLabel(message.context)}</button>}{message.generation_status==='cancelled'&&<Badge tone="warning">Interrompida</Badge>}</div>}</article>)}
+      {candidates.map(item=><div className="memory-suggestion" key={item.id}><span className="eyebrow">JARVIS SUGERE LEMBRAR</span><p>{item.content}</p><small>{item.memory_type} · confiança {Math.round(item.confidence*100)}% · {item.dedupe_status}</small><div><button onClick={()=>void candidateAction(item,'ignore')}>Ignorar</button><button onClick={()=>void candidateAction(item,'edit')}>Editar</button><button className="primary" onClick={()=>void candidateAction(item,'save')}>Salvar</button></div></div>)}
+      {pending.map(action=><ActionCard key={action.action_id} action={action} confirm={(id,approved)=>void confirm(id,approved)}/>)}{busy&&<div className="typing"><i/><i/><i/></div>}{error&&<div className="chat-error"><span>{error}</span><button onClick={()=>void stream(lastPrompt)}><RotateCcw/>Tentar novamente</button></div>}<div ref={bottom}/></div>
+      <form className="composer" onSubmit={send}><button disabled type="button" className="icon-button" title="Voz será disponibilizada em fase futura"><Mic/></button><textarea value={input} onChange={event=>setInput(event.target.value)} placeholder="Fale com o Jarvis local…" rows={1} onKeyDown={event=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();event.currentTarget.form?.requestSubmit()}}}/>{busy?<button type="button" className="send stop" onClick={()=>controller.current?.abort()}><Square/></button>:<button className="send" disabled={!input.trim()}><Send/></button>}</form></main></div>
 }

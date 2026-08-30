@@ -4,19 +4,23 @@ from datetime import datetime
 from typing import Any
 
 import psutil
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.database import utc_now
-from app.services.knowledge import search_documents
+from app.services.domains import knowledge_service, memory_service, task_service
 from app.services.repository import repository
+from app.services.schemas import MemoryInput, TaskInput, TaskPatch
 from app.tools.base import RiskLevel, Tool
 
 
 class FunctionTool(Tool):
-    def __init__(self, name: str, description: str, schema: dict[str, Any], risk: RiskLevel, function):
+    def __init__(self, name: str, description: str, schema: dict[str, Any], risk: RiskLevel, function, input_model: type[BaseModel] | None = None):
         self.name, self.description, self.input_schema, self.risk_level = name, description, schema, risk
-        self.function = function
+        self.function, self.input_model = function, input_model
 
     def execute(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if self.input_model:
+            payload = self.input_model.model_validate(payload).model_dump(exclude_none=True)
         return self.function(payload)
 
 
@@ -56,96 +60,43 @@ def _list_notes(_: dict) -> dict:
 
 
 def _save_memory(payload: dict) -> dict:
-    content = payload.get("content", "").strip()
-    category = payload.get("category", "other")
-    if not content:
-        raise ValueError("Conteúdo da memória é obrigatório.")
-    allowed = {"preference", "person", "project", "routine", "fact", "instruction", "decision", "other"}
-    if category not in allowed:
-        raise ValueError("Categoria de memória inválida.")
-    item_id, now = str(uuid.uuid4()), utc_now()
-    with repository_connection() as connection:
-        connection.execute(
-            "INSERT INTO memories VALUES (?,?,?,?,?,?,?,?,?)",
-            (item_id, content, category, int(payload.get("importance", 3)), "conversation", payload.get("source_reference"), now, now, None),
-        )
-        connection.execute("INSERT INTO memories_fts VALUES (?,?,?)", (item_id, content, category))
-    return {"id": item_id, "content": content, "saved": True}
+    return memory_service.create(MemoryInput(**payload, source_type="conversation"))
 
 
 def _search_memory(payload: dict) -> dict:
     query = payload.get("query", "").strip()
     if not query:
         return {"items": []}
-    try:
-        items = repository.rows(
-            "SELECT m.* FROM memories_fts f JOIN memories m ON m.id=f.id WHERE memories_fts MATCH ? ORDER BY rank LIMIT 10",
-            (query,),
-        )
-    except Exception:
-        items = repository.rows("SELECT * FROM memories WHERE content LIKE ? LIMIT 10", (f"%{query}%",))
-    return {"items": items}
+    return {"items": memory_service.hybrid_search(query, 10)}
 
 
 def _list_memories(_: dict) -> dict:
-    return {"items": repository.rows("SELECT * FROM memories ORDER BY updated_at DESC")}
+    return {"items": memory_service.list()}
 
 
 def _delete_memory(payload: dict) -> dict:
-    item_id = payload.get("id")
-    with repository_connection() as connection:
-        exists = connection.execute("SELECT 1 FROM memories WHERE id=?", (item_id,)).fetchone()
-        if not exists:
-            raise ValueError("Memória não encontrada.")
-        connection.execute("DELETE FROM memories WHERE id=?", (item_id,))
-        connection.execute("DELETE FROM memories_fts WHERE id=?", (item_id,))
-    return {"id": item_id, "deleted": True}
+    return memory_service.delete(payload["id"])
 
 
 def _create_task(payload: dict) -> dict:
-    title = payload.get("title", "").strip()
-    if not title:
-        raise ValueError("Título da tarefa é obrigatório.")
-    item_id, now = str(uuid.uuid4()), utc_now()
-    repository.execute(
-        "INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-        (item_id, title, payload.get("description", ""), "inbox", payload.get("priority", "normal"), now, now,
-         payload.get("due_at"), None, payload.get("project"), "chat", payload.get("estimated_minutes")),
-    )
-    return {"id": item_id, "title": title, "created": True}
+    return task_service.create(TaskInput(**payload), source="chat")
 
 
 def _update_task(payload: dict) -> dict:
-    item_id = payload.get("id")
-    task = repository.row("SELECT * FROM tasks WHERE id=?", (item_id,))
-    if not task:
-        raise ValueError("Tarefa não encontrada.")
-    allowed = {"title", "description", "status", "priority", "due_at", "project", "estimated_minutes"}
-    changes = {key: value for key, value in payload.items() if key in allowed}
-    if not changes:
-        raise ValueError("Nenhuma alteração válida informada.")
-    assignments = ", ".join(f"{key}=?" for key in changes)
-    repository.execute(f"UPDATE tasks SET {assignments}, updated_at=? WHERE id=?", tuple(changes.values()) + (utc_now(), item_id))
-    return {"id": item_id, "updated": True}
+    item_id = payload.pop("id")
+    return task_service.update(item_id, TaskPatch(**payload))
 
 
 def _complete_task(payload: dict) -> dict:
-    item_id, now = payload.get("id"), utc_now()
-    if not repository.row("SELECT id FROM tasks WHERE id=?", (item_id,)):
-        raise ValueError("Tarefa não encontrada.")
-    repository.execute("UPDATE tasks SET status='done', completed_at=?, updated_at=? WHERE id=?", (now, now, item_id))
-    return {"id": item_id, "completed": True}
+    return task_service.update(payload["id"], TaskPatch(status="done"))
 
 
 def _list_tasks(payload: dict) -> dict:
-    status = payload.get("status")
-    if status:
-        return {"items": repository.rows("SELECT * FROM tasks WHERE status=? ORDER BY updated_at DESC", (status,))}
-    return {"items": repository.rows("SELECT * FROM tasks ORDER BY updated_at DESC")}
+    return {"items": task_service.list(payload.get("status"))}
 
 
 def _search_documents(payload: dict) -> dict:
-    return {"items": search_documents(payload.get("query", ""))}
+    return {"items": knowledge_service.search(payload.get("query", ""))}
 
 
 def repository_connection():
@@ -156,6 +107,29 @@ def repository_connection():
 OBJECT = {"type": "object", "properties": {}, "additionalProperties": False}
 
 
+class IdPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(min_length=1)
+
+
+class QueryPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    query: str = Field(min_length=1, max_length=2000)
+
+
+class TaskCreateToolInput(TaskInput):
+    model_config = ConfigDict(extra="forbid")
+
+
+class TaskUpdateToolInput(TaskPatch):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(min_length=1)
+
+
+class MemoryToolInput(MemoryInput):
+    model_config = ConfigDict(extra="forbid")
+
+
 def initial_tools() -> list[Tool]:
     return [
         FunctionTool("get_current_datetime", "Obtém data e hora reais.", OBJECT, RiskLevel.SAFE, _get_current_datetime),
@@ -163,14 +137,13 @@ def initial_tools() -> list[Tool]:
         FunctionTool("create_note", "Cria uma nota local após confirmação.", {"type":"object","properties":{"title":{"type":"string"},"content":{"type":"string"}},"required":["title","content"]}, RiskLevel.CONFIRM, _create_note),
         FunctionTool("read_note", "Lê uma nota pelo id.", {"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}, RiskLevel.SAFE, _read_note),
         FunctionTool("list_notes", "Lista notas locais.", OBJECT, RiskLevel.SAFE, _list_notes),
-        FunctionTool("save_memory", "Salva memória estruturada após confirmação.", {"type":"object","properties":{"content":{"type":"string"},"category":{"type":"string"},"importance":{"type":"integer"}},"required":["content"]}, RiskLevel.CONFIRM, _save_memory),
-        FunctionTool("search_memory", "Pesquisa a memória local.", {"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}, RiskLevel.SAFE, _search_memory),
+        FunctionTool("save_memory", "Salva memória estruturada após confirmação.", MemoryToolInput.model_json_schema(), RiskLevel.CONFIRM, _save_memory, MemoryToolInput),
+        FunctionTool("search_memory", "Pesquisa a memória local por ranking híbrido.", QueryPayload.model_json_schema(), RiskLevel.SAFE, _search_memory, QueryPayload),
         FunctionTool("list_memories", "Lista memórias locais.", OBJECT, RiskLevel.SAFE, _list_memories),
-        FunctionTool("delete_memory", "Exclui memória após confirmação.", {"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}, RiskLevel.CONFIRM, _delete_memory),
-        FunctionTool("create_task", "Cria uma tarefa local após confirmação.", {"type":"object","properties":{"title":{"type":"string"},"description":{"type":"string"},"priority":{"type":"string"},"due_at":{"type":["string","null"]}},"required":["title"]}, RiskLevel.CONFIRM, _create_task),
-        FunctionTool("update_task", "Atualiza uma tarefa após confirmação.", {"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"status":{"type":"string"},"priority":{"type":"string"},"due_at":{"type":["string","null"]}},"required":["id"]}, RiskLevel.CONFIRM, _update_task),
-        FunctionTool("complete_task", "Conclui uma tarefa após confirmação.", {"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}, RiskLevel.CONFIRM, _complete_task),
+        FunctionTool("delete_memory", "Exclui memória após confirmação.", IdPayload.model_json_schema(), RiskLevel.CONFIRM, _delete_memory, IdPayload),
+        FunctionTool("create_task", "Cria uma tarefa local após confirmação.", TaskCreateToolInput.model_json_schema(), RiskLevel.CONFIRM, _create_task, TaskCreateToolInput),
+        FunctionTool("update_task", "Atualiza uma tarefa após confirmação.", TaskUpdateToolInput.model_json_schema(), RiskLevel.CONFIRM, _update_task, TaskUpdateToolInput),
+        FunctionTool("complete_task", "Conclui uma tarefa após confirmação.", IdPayload.model_json_schema(), RiskLevel.CONFIRM, _complete_task, IdPayload),
         FunctionTool("list_tasks", "Lista tarefas reais.", {"type":"object","properties":{"status":{"type":"string"}}}, RiskLevel.SAFE, _list_tasks),
-        FunctionTool("search_documents", "Pesquisa trechos da biblioteca local.", {"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}, RiskLevel.SAFE, _search_documents),
+        FunctionTool("search_documents", "Pesquisa trechos ativos da biblioteca local.", QueryPayload.model_json_schema(), RiskLevel.SAFE, _search_documents, QueryPayload),
     ]
-

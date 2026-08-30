@@ -33,7 +33,7 @@ def test_unrelated_memories_do_not_create_decorative_edges():
 def test_graph_contains_only_real_entities(isolated_data):
     now=utc_now()
     with database() as connection:
-        connection.execute("INSERT INTO memories VALUES (?,?,?,?,?,?,?,?,?)",("m1","Jarvis usa memória local","fact",4,"manual",None,now,now,None))
+        connection.execute("INSERT INTO memories (id,content,category,importance,source_type,source_reference,created_at,updated_at,last_used_at) VALUES (?,?,?,?,?,?,?,?,?)",("m1","Jarvis usa memória local","fact",4,"manual",None,now,now,None))
         connection.execute("INSERT INTO memories_fts VALUES (?,?,?)",("m1","Jarvis usa memória local","fact"))
         connection.execute("INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",("t1","Validar núcleo","","inbox","high",now,now,None,None,None,"manual",None))
     graph=cognitive_graph_service.build([])
@@ -53,7 +53,7 @@ def test_cooccurrence_grows_only_from_real_context(isolated_data):
     now=utc_now()
     with database() as connection:
         for item_id,content in (("m1","Projeto Jarvis local"),("m2","Arquitetura Jarvis local")):
-            connection.execute("INSERT INTO memories VALUES (?,?,?,?,?,?,?,?,?)",(item_id,content,"project",3,"manual",None,now,now,None))
+            connection.execute("INSERT INTO memories (id,content,category,importance,source_type,source_reference,created_at,updated_at,last_used_at) VALUES (?,?,?,?,?,?,?,?,?)",(item_id,content,"project",3,"manual",None,now,now,None))
     cognitive_graph_service.record_cooccurrence(["m1","m2"])
     cognitive_graph_service.record_cooccurrence(["m1","m2"])
     with database() as connection:

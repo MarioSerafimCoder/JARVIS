@@ -34,27 +34,8 @@ class ConversationContextRetriever:
 
 class MemoryRetriever:
     def retrieve(self, query: str, limit: int) -> list[dict[str, Any]]:
-        tokens = normalize_query(query)
-        if not tokens:
-            return []
-        match = " OR ".join(f'"{token}"' for token in tokens)
-        try:
-            items = repository.rows(
-                "SELECT m.*, bm25(memories_fts) AS fts_rank FROM memories_fts f "
-                "JOIN memories m ON m.id=f.id WHERE memories_fts MATCH ? LIMIT ?",
-                (match, limit * 3),
-            )
-        except Exception:
-            return []
-        now = datetime.now(timezone.utc)
-        for item in items:
-            try:
-                age_days = max(0.0, (now - datetime.fromisoformat(item["updated_at"])).total_seconds() / 86400)
-            except Exception:
-                age_days = 365.0
-            textual = max(0.0, -float(item.get("fts_rank") or 0))
-            item["score"] = round(textual + item["importance"] * 0.2 + 0.25 / (1 + age_days / 30), 4)
-        return sorted(items, key=lambda item: item["score"], reverse=True)[:limit]
+        from app.services.domains import memory_service
+        return memory_service.hybrid_search(query, limit)
 
     def mark_used(self, items: list[dict[str, Any]]) -> None:
         if not items:
@@ -69,14 +50,6 @@ class KnowledgeRetriever:
 
 
 class TaskContextRetriever:
-    TRIGGERS = {"tarefa", "tarefas", "hoje", "prazo", "pendente", "projeto", "prioridade"}
-
     def retrieve(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
-        if not set(normalize_query(query)) & self.TRIGGERS:
-            return []
-        return repository.rows(
-            "SELECT id,title,status,priority,due_at,project FROM tasks "
-            "WHERE status NOT IN ('done','cancelled') ORDER BY CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 ELSE 2 END, updated_at DESC LIMIT ?",
-            (limit,),
-        )
-
+        from app.services.domains import task_service
+        return task_service.relevant(query, limit)

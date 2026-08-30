@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     max_memory_items: int = 6
     max_document_chunks: int = 5
     max_context_chars: int = 28000
+    max_agent_cycles: int = 5
+    conversation_summary_interval: int = 6
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     def model_post_init(self, __context: object) -> None:

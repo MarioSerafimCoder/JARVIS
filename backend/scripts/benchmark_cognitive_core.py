@@ -15,7 +15,15 @@ def run(count: int) -> float:
             initialize_database(); now=utc_now()
             rows=[(f"m{i}",f"Memória controlada projeto grupo{i%120:03} tópico item{i%90:03}","project" if i%2 else "fact",3,"system",None,now,now,None) for i in range(count)]
             with database() as connection:
-                connection.executemany("INSERT INTO memories VALUES (?,?,?,?,?,?,?,?,?)",rows)
+                connection.executemany(
+                    """
+                    INSERT INTO memories (
+                        id, content, category, importance, source_type,
+                        source_reference, created_at, updated_at, last_used_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
             started=time.perf_counter(); graph=cognitive_graph_service.build([]); elapsed=time.perf_counter()-started
             print(f"{count:>5} memórias | {len(graph['edges']):>5} relações | {elapsed:.4f}s")
             return elapsed

@@ -14,7 +14,7 @@ class ToolExecutor:
     def __init__(self, registry: ToolRegistry):
         self.registry = registry
 
-    def request(self, name: str, payload: dict[str, Any], conversation_id: str | None = None) -> dict[str, Any]:
+    def request(self, name: str, payload: dict[str, Any], conversation_id: str | None = None, agent_run_id: str | None = None) -> dict[str, Any]:
         try:
             tool = self.registry.get(name)
         except KeyError as exc:
@@ -28,12 +28,12 @@ class ToolExecutor:
         if tool.risk_level == RiskLevel.CONFIRM:
             action_id = str(uuid.uuid4())
             repository.execute(
-                "INSERT INTO pending_actions (id,tool,input_json,status,conversation_id,created_at,resolved_at,executed_at) VALUES (?,?,?,?,?,?,?,?)",
-                (action_id, name, json.dumps(payload, ensure_ascii=False), "pending_confirmation", conversation_id, utc_now(), None, None),
+                "INSERT INTO pending_actions (id,tool,input_json,status,conversation_id,created_at,resolved_at,executed_at,agent_run_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                (action_id, name, json.dumps(payload, ensure_ascii=False), "pending_confirmation", conversation_id, utc_now(), None, None, agent_run_id),
             )
             cognitive_state_service.set_state(CognitiveState.WAITING_CONFIRMATION, reason=name)
             cognitive_state_service.emit(CognitiveEventType.TOOL_REQUESTED, {"tool": name, "action_id": action_id, "status": "pending_confirmation"})
-            return {"status": "pending_confirmation", "action_id": action_id, "tool": name, "input": payload}
+            return {"status": "pending_confirmation", "action_id": action_id, "tool": name, "input": payload, "agent_run_id": agent_run_id}
         return self._execute(tool.name, payload, conversation_id)
 
     def confirm(self, action_id: str, approved: bool) -> dict[str, Any]:
@@ -49,7 +49,7 @@ class ToolExecutor:
         result = self._execute(action["tool"], json.loads(action["input_json"]), action["conversation_id"])
         now = utc_now()
         repository.execute("UPDATE pending_actions SET status=?, resolved_at=?, executed_at=? WHERE id=?", (result["status"], now, now, action_id))
-        return {**result, "action_id": action_id}
+        return {**result, "action_id": action_id, "agent_run_id": action.get("agent_run_id")}
 
     def _execute(self, name: str, payload: dict[str, Any], conversation_id: str | None) -> dict[str, Any]:
         tool = self.registry.get(name)

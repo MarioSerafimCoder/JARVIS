@@ -5,6 +5,8 @@ from fastapi import APIRouter
 from app.api.errors import api_error
 from app.core.database import utc_now
 from app.services.repository import repository
+from app.services.domains import conversation_service
+from app.services.schemas import FeedbackInput
 
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
@@ -23,7 +25,8 @@ def get_conversation(conversation_id: str) -> dict:
     messages = repository.rows("SELECT * FROM messages WHERE conversation_id=? ORDER BY created_at", (conversation_id,))
     for message in messages:
         message["context"] = json.loads(message.pop("context_json"))
-    return {**item, "messages": messages}
+        message["feedback"] = repository.row("SELECT rating,correction,created_at FROM message_feedback WHERE message_id=?", (message["id"],))
+    return {**item, "messages": messages, "summary": conversation_service.summary(conversation_id)}
 
 
 @router.patch("/{conversation_id}")
@@ -45,3 +48,10 @@ def delete_conversation(conversation_id: str) -> dict:
     repository.execute("DELETE FROM conversations WHERE id=?", (conversation_id,))
     return {"id": conversation_id, "deleted": True}
 
+
+@router.post("/messages/{message_id}/feedback")
+def message_feedback(message_id: str, payload: FeedbackInput) -> dict:
+    try:
+        return conversation_service.feedback(message_id, payload)
+    except ValueError as exc:
+        raise api_error(404, "NOT_FOUND", str(exc)) from exc

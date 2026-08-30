@@ -101,7 +101,7 @@ def search_documents(query: str, limit: int = 5) -> list[dict]:
         return repository.rows(
             "SELECT f.document_id, f.filename, f.content AS relevant_text, c.location, bm25(document_chunks_fts) AS score "
             "FROM document_chunks_fts f JOIN document_chunks c ON c.id=f.chunk_id "
-            "WHERE document_chunks_fts MATCH ? ORDER BY score LIMIT ?",
+            "WHERE document_chunks_fts MATCH ? AND COALESCE((SELECT use_for_rag FROM documents d WHERE d.id=f.document_id),1)=1 ORDER BY score LIMIT ?",
             (safe_query, limit),
         )
     except Exception:

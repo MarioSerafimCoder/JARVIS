@@ -5,9 +5,9 @@ USUÁRIO
   ↓
 REACT / VITE ───────────── CONTEXT INSPECTOR 2.0
   ↓ HTTP + SSE localhost           ↑ evidências + orçamento
-FASTAPI / API MODULAR         AGENT CONTROLLER
+FASTAPI / API MODULAR         AGENT LOOP (máx. 5 ciclos)
   ↓                                ↓
-SQLITE ← REPOSITÓRIOS ← CONTEXT BUILDER ← RETRIEVERS
+SQLITE ← DOMAIN SERVICES ← CONTEXT BUILDER 3.0 ← HYBRID RETRIEVERS
   ↑                                ↓
 MEMÓRIA · TAREFAS · DOCUMENTOS   LLMProvider
                                    ↓
@@ -26,7 +26,9 @@ COGNITIVE GRAPH SERVICE ← SQLITE + TOOL REGISTRY
 THREE.JS / FALLBACK 2D ← SSE ← COGNITIVE STATE SERVICE
 ```
 
-O frontend nunca acessa o SQLite diretamente. `AgentController` orquestra persona, contexto, modelo e ferramentas. `ContextBuilder` seleciona apenas mensagens recentes, memórias relevantes, trechos FTS5 e tarefas relacionadas; o banco inteiro não é enviado ao modelo.
+O frontend nunca acessa o SQLite diretamente. `AgentController` persiste `agent_runs`, itera entre modelo e ferramentas e pausa exatamente o mesmo run em ações `CONFIRM`. `ContextBuilder` seleciona itens inteiros: persona, resumo incremental, mensagens recentes, memórias ativas, trechos habilitados e tarefas relacionadas; o banco inteiro não é enviado ao modelo.
+
+`MemoryService`, `TaskService`, `KnowledgeService` e `ConversationService` concentram validação e regras usadas tanto pela API quanto pelas tools. A busca de memória combina FTS5, embedding local opcional, importância e recência, preservando FTS5 como fallback.
 
 `LLMProvider` impede que detalhes do Ollama se espalhem pelo domínio. `LLMRegistry` permite providers futuros sem mudar o controlador. Atualmente só existe `OllamaProvider`, sem fallback externo. O chat usa SSE e o cancelamento fecha a geração, preservando o texto parcial com estado explícito.
 

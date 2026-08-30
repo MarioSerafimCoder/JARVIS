@@ -15,7 +15,7 @@ def test_txt_document_is_indexed_and_searchable(tmp_path: Path):
     path = tmp_path / "manual.txt"
     path.write_text("O código ultravioleta do projeto é orquídea local.", encoding="utf-8")
     repository.execute(
-        "INSERT INTO documents VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO documents (id,filename,original_name,type,size,status,tags,description,created_at,chunk_count,error) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         ("doc-1", "stored.txt", "manual.txt", "txt", path.stat().st_size, "processing", "[]", "", utc_now(), 0, None),
     )
     result = index_document("doc-1", "manual.txt", path, ".txt")
@@ -29,7 +29,7 @@ def test_empty_document_reports_ocr_future(tmp_path: Path):
     path = tmp_path / "empty.txt"
     path.write_text("", encoding="utf-8")
     repository.execute(
-        "INSERT INTO documents VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO documents (id,filename,original_name,type,size,status,tags,description,created_at,chunk_count,error) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         ("doc-2", "empty.txt", "empty.txt", "txt", 0, "processing", "[]", "", utc_now(), 0, None),
     )
     result = index_document("doc-2", "empty.txt", path, ".txt")

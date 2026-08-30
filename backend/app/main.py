@@ -5,6 +5,20 @@ import sys
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+
+class SPAStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        try:
+            response = await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code == 404 and "." not in Path(path).name:
+                return await super().get_response("index.html", scope)
+            raise
+        if response.status_code == 404 and "." not in Path(path).name:
+            return await super().get_response("index.html", scope)
+        return response
 
 from app.api.router import router
 from app.core.database import initialize_database
@@ -31,7 +45,7 @@ if getattr(sys, "frozen", False):
 else:
     frontend_path = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 if frontend_path.exists():
-    app.mount("/", StaticFiles(directory=frontend_path, html=True), name="frontend")
+    app.mount("/", SPAStaticFiles(directory=frontend_path, html=True), name="frontend")
 else:
     @app.get("/")
     def root() -> dict[str, str]:

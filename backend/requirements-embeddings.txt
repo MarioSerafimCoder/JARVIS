@@ -1,0 +1,2 @@
+# Optional local semantic layer. Jarvis keeps FTS5 working when this file is not installed.
+sentence-transformers>=5.1,<6
