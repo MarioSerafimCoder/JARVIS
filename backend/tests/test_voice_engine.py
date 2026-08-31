@@ -125,14 +125,21 @@ def test_resource_modes_are_explicit_and_sequential():
 
 
 @pytest.mark.asyncio
-async def test_voice_session_runs_transcript_agent_chunked_tts_and_returns_to_listening(isolated_data):
+async def test_voice_session_tracks_real_browser_playback_before_returning_to_listening(isolated_data):
     manager, _, tts, _ = await built_manager(isolated_data, ["O que tenho hoje?"])
     session = manager.open()
     events = [event async for event in manager.process_utterance(session.session_id, b"encoded-audio")]
     assert next(event for event in events if event["type"] == "transcript")["text"] == "O que tenho hoje?"
     assert len([event for event in events if event["type"] == "tts_chunk"]) == 2
     assert len(tts.synthesis_calls) == 2
-    assert events[-1]["type"] == "listening"
+    chunks = [event for event in events if event["type"] == "tts_chunk"]
+    assert events[-1]["type"] == "playback_queued"
+    assert cognitive_state_service.snapshot()["state"] != CognitiveState.SPEAKING
+    manager.playback_event(session.session_id, chunks[0]["queue_id"], "playback_started")
+    assert cognitive_state_service.snapshot()["state"] == CognitiveState.SPEAKING
+    manager.playback_event(session.session_id, chunks[0]["queue_id"], "playback_finished")
+    manager.playback_event(session.session_id, chunks[1]["queue_id"], "playback_started")
+    manager.playback_event(session.session_id, chunks[1]["queue_id"], "playback_finished")
     assert cognitive_state_service.snapshot()["state"] == CognitiveState.LISTENING
     assert not list((isolated_data.voice_path / "temp").glob("*"))
 
@@ -197,9 +204,12 @@ def test_voice_websocket_protocol_with_fake_providers(isolated_data, monkeypatch
             event_types = []
             for _ in range(20):
                 event = websocket.receive_json(); event_types.append(event["type"])
-                if event["type"] == "listening":
+                if event["type"] == "tts_chunk":
+                    websocket.send_json({"type": "playback_started", "queue_id": event["queue_id"]})
+                    websocket.send_json({"type": "playback_finished", "queue_id": event["queue_id"]})
+                if event["type"] == "playback_finished" and event.get("state") == "LISTENING":
                     break
-            assert {"transcript", "thinking", "assistant_text", "tts_chunk", "speaking", "listening"}.issubset(event_types)
+            assert {"transcript", "thinking", "assistant_text", "tts_chunk", "playback_started", "playback_finished"}.issubset(event_types)
             websocket.send_json({"type": "session_stop"})
 
 

@@ -121,6 +121,30 @@ class VoiceSessionManager:
         cognitive_state_service.set_state(CognitiveState.LISTENING, reason="voice_barge_in")
         return {"type": "interrupted", "session_id": session_id, "state": "LISTENING"}
 
+    def playback_event(self, session_id: str, queue_id: str, event: str) -> dict[str, Any]:
+        session = self.get(session_id)
+        item = next((candidate for candidate in session.queue if candidate["id"] == queue_id), None)
+        if not item:
+            raise VoiceEngineError("VOICE_SESSION_FAILED", "Item de reprodução não pertence a esta sessão.")
+        if event == "playback_started":
+            if item["status"] not in {"ready", "playing"}:
+                raise VoiceEngineError("VOICE_SESSION_FAILED", "Item de reprodução não está pronto.")
+            item["status"] = "playing"
+            session.status = "speaking"
+            if session.turns:
+                self.turns.transition(session.turns[-1], "speaking")
+            cognitive_state_service.set_state(CognitiveState.SPEAKING, reason="voice_playback_started")
+            return {"type": "playback_started", "queue_id": queue_id, "state": "SPEAKING"}
+        item["status"] = "finished" if event == "playback_finished" else "cancelled"
+        remaining = any(candidate["status"] in {"queued", "generating", "ready", "playing"} for candidate in session.queue)
+        if not remaining:
+            session.status = "listening"
+            if session.turns:
+                self.turns.transition(session.turns[-1], "waiting")
+            repository.execute("UPDATE voice_sessions_metadata SET turn_count=? WHERE id=?", (len(session.turns), session_id))
+            cognitive_state_service.set_state(CognitiveState.LISTENING, reason=event)
+        return {"type": event, "queue_id": queue_id, "state": "SPEAKING" if remaining else "LISTENING"}
+
     async def close(self, session_id: str, error: str | None = None) -> None:
         session = self.get(session_id); session.status = "closed"; session.queue.clear()
         repository.execute(
@@ -144,8 +168,9 @@ class VoiceSessionManager:
             {"type": "assistant_text", "text": message, "final": True, "message_id": result.get("message_id")},
         ]
         events.extend(await self._speech_events(session, message, "confirmation", session.playback_generation))
-        session.status = "listening"; cognitive_state_service.set_state(CognitiveState.LISTENING, reason="voice_confirmation_complete")
-        events.append({"type": "listening", "state": "LISTENING"})
+        if not any(item["status"] == "ready" for item in session.queue):
+            session.status = "listening"; cognitive_state_service.set_state(CognitiveState.LISTENING, reason="voice_confirmation_complete")
+            events.append({"type": "listening", "state": "LISTENING"})
         return events
 
     async def _speech_events(self, session: VoiceSession, text: str, style: str, generation: int) -> list[dict[str, Any]]:
@@ -234,12 +259,14 @@ class VoiceSessionManager:
                     yield {"type": "assistant_text", "text": full_text, "final": True, "message_id": turn.assistant_message_id, "actions": event.get("actions", [])}
             for sentence in chunker.flush():
                 for speech_event in await self._speech_events(session, sentence, "neutral", generation): yield speech_event
-        self.turns.transition(turn, "speaking"); session.status = "speaking"; cognitive_state_service.set_state(CognitiveState.SPEAKING, reason="voice_playback")
-        yield {"type": "speaking", "turn_id": turn.turn_id, "state": "SPEAKING"}
-        self.turns.transition(turn, "waiting"); session.status = "listening"
-        repository.execute("UPDATE voice_sessions_metadata SET turn_count=? WHERE id=?", (len(session.turns), session_id))
-        cognitive_state_service.set_state(CognitiveState.LISTENING, reason="voice_turn_complete")
-        yield {"type": "listening", "turn_id": turn.turn_id, "state": "LISTENING"}
+        if any(item["status"] == "ready" for item in session.queue):
+            session.status = "playback_queued"
+            yield {"type": "playback_queued", "turn_id": turn.turn_id, "state": "THINKING"}
+        else:
+            self.turns.transition(turn, "waiting"); session.status = "listening"
+            repository.execute("UPDATE voice_sessions_metadata SET turn_count=? WHERE id=?", (len(session.turns), session_id))
+            cognitive_state_service.set_state(CognitiveState.LISTENING, reason="voice_turn_complete_without_audio")
+            yield {"type": "listening", "turn_id": turn.turn_id, "state": "LISTENING"}
 
     def status(self) -> dict[str, Any]:
         return {

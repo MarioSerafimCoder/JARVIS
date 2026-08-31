@@ -25,6 +25,7 @@ def pending_tools() -> list[dict]:
     items = repository.rows("SELECT * FROM pending_actions WHERE status='pending_confirmation' ORDER BY created_at DESC")
     for item in items:
         item["input"] = json.loads(item.pop("input_json"))
+        item["display"] = json.loads(item.pop("display_json") or "{}")
         item["action_id"] = item["id"]
     return items
 

@@ -10,6 +10,7 @@ from app.core.context import ContextBuilder
 from app.core.persona import load_persona
 from app.llm.base import LLMProvider
 from app.services.agent_runs import agent_run_service
+from app.services.conversation_state import ConversationStateService
 from app.services.domains import conversation_service
 from app.services.memory_consolidator import memory_consolidator
 from app.services.repository import repository
@@ -21,6 +22,7 @@ class AgentController:
     def __init__(self, provider: LLMProvider, registry: ToolRegistry, executor: ToolExecutor, settings: Settings):
         self.provider, self.registry, self.executor, self.settings = provider, registry, executor, settings
         self.context_builder = ContextBuilder(settings)
+        self.conversation_states = ConversationStateService(provider)
 
     def _conversation(self, conversation_id: str | None, title: str) -> dict[str, Any]:
         conversation = repository.row("SELECT * FROM conversations WHERE id=?", (conversation_id,)) if conversation_id else None
@@ -77,9 +79,13 @@ class AgentController:
                         (source["source_id"], conversation_id, evidence.get("source_message_id"), data.get("query"), source.get("title", ""), source.get("url", ""), source.get("domain", ""), source.get("published_at"), source.get("retrieved_at"), source.get("excerpt", "")),
                     )
         elif name == "web_read":
-            page = {key: data.get(key) for key in ("source_id", "title", "url", "domain", "retrieved_at", "truncated")}
+            parent = next((item for item in web["sources"] if item.get("url", "").split("#", 1)[0] == str(data.get("url", "")).split("#", 1)[0]), None)
+            fetch_id = data.get("source_id")
+            source_id = parent.get("source_id") if parent else fetch_id
+            page = {key: data.get(key) for key in ("title", "url", "domain", "retrieved_at", "truncated")}
+            page.update({"source_id": source_id, "page_fetch_id": fetch_id, "parent_source_id": parent.get("source_id") if parent else None})
             web["pages"].append(page)
-            web["used"].append(data.get("source_id"))
+            web["used"].append(source_id)
         elif name.startswith("browser_"):
             evidence.setdefault("browser", []).append({"action": name, "site": data.get("site"), "verified": data.get("verified"), "status": data.get("status", outcome.get("status"))})
 
@@ -93,9 +99,13 @@ class AgentController:
         run = agent_run_service.start(conversation_id, built.messages, built.evidence, self.settings.max_agent_cycles)
         return run["id"], conversation_id, user_message, built.messages, built.evidence
 
-    def _post_turn(self, conversation_id: str, user_message: dict[str, Any]) -> list[dict[str, Any]]:
+    async def _post_turn(self, conversation_id: str, user_message: dict[str, Any]) -> list[dict[str, Any]]:
         conversation_service.maybe_update_summary(conversation_id, self.settings.conversation_summary_interval)
-        return memory_consolidator.analyze(user_message["content"], conversation_id=conversation_id, source_message_id=user_message["id"])
+        await self.conversation_states.maybe_update(conversation_id, self.settings.conversation_summary_interval)
+        return await memory_consolidator.analyze_hybrid(
+            user_message["content"], conversation_id=conversation_id,
+            source_message_id=user_message["id"], provider=self.provider,
+        )
 
     async def _continue_non_stream(self, run_id: str, conversation_id: str, messages: list[dict[str, Any]], evidence: dict[str, Any], step_count: int = 0, actions: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         actions = list(actions or [])
@@ -118,7 +128,7 @@ class AgentController:
                 return {"conversation_id": conversation_id, "message": content, "message_id": assistant["id"], "context": evidence, "actions": actions, "agent_run_id": run_id, "agent_status": "completed"}
             messages.append(model_message)
             for name, arguments in calls:
-                outcome = self.executor.request(name, arguments, conversation_id, run_id)
+                outcome = await self.executor.request_async(name, arguments, conversation_id, run_id)
                 actions.append(outcome)
                 self._record_network_evidence(name, outcome, evidence, conversation_id)
                 agent_run_service.step(run_id, step_count, "tool", outcome["status"], tool_name=name, input_data=arguments, result=outcome)
@@ -148,7 +158,7 @@ class AgentController:
         run_id, conversation_id, user_message, messages, evidence = self._start(message, conversation_id)
         try:
             result = await self._continue_non_stream(run_id, conversation_id, messages, evidence)
-            result["memory_candidates"] = self._post_turn(conversation_id, user_message)
+            result["memory_candidates"] = await self._post_turn(conversation_id, user_message) if result.get("agent_status") == "completed" else []
             return result
         except Exception as exc:
             agent_run_service.update(run_id, status="failed", messages=messages, step_count=0, context=evidence, error=str(exc))
@@ -162,19 +172,20 @@ class AgentController:
         actions: list[dict[str, Any]] = []
         step_count = 0
         total_prompt = total_output = 0
-        emitted_content = ""
+        delivered_content = ""
         yield {"type": "start", "conversation_id": conversation_id, "context": evidence, "agent_run_id": run_id}
         try:
             while step_count < self.settings.max_agent_cycles:
                 model_message: dict[str, Any] = {"role": "assistant", "content": "", "tool_calls": []}
                 content = ""
+                final_pieces: list[str] = []
                 async for event in self.provider.stream_chat(messages, self.registry.schemas()):
                     total_prompt += int(event.get("prompt_eval_count", 0)); total_output += int(event.get("eval_count", 0))
                     chunk = event.get("message", {})
                     piece = chunk.get("content", "")
                     if piece:
                         content += piece
-                        yield {"type": "token", "content": piece}
+                        final_pieces.append(piece)
                     if chunk.get("tool_calls"):
                         model_message["tool_calls"] = chunk["tool_calls"]
                 model_message["content"] = content
@@ -182,19 +193,25 @@ class AgentController:
                 calls = self._calls(model_message)
                 agent_run_service.step(run_id, step_count, "model", "tool_requested" if calls else "answered", result={"tool_count": len(calls), "has_content": bool(content.strip())})
                 if not calls:
-                    content = (emitted_content + content).strip() or "Não consegui gerar uma resposta útil. Verifique o modelo local."
+                    content = content.strip() or "Não consegui gerar uma resposta útil. Verifique o modelo local."
+                    # Only a turn with no tool calls is user-visible. Preserve its
+                    # native chunks, but never expose text from intermediate turns.
+                    visible_pieces = final_pieces if content == "".join(final_pieces).strip() else [content]
+                    for piece in visible_pieces:
+                        delivered_content += piece
+                        yield {"type": "token", "content": piece}
                     evidence.update({"actions": actions, "agent_run_id": run_id, "agent_steps": step_count})
                     assistant = repository.add_message(conversation_id, "assistant", content, evidence)
                     agent_run_service.update(run_id, status="completed", messages=messages + [model_message], step_count=step_count, context=evidence)
                     repository.usage(self.settings.model_name, total_prompt, total_output)
-                    candidates = self._post_turn(conversation_id, user_message)
+                    candidates = await self._post_turn(conversation_id, user_message)
                     cognitive_state_service.emit(CognitiveEventType.GENERATION_FINISHED, {"status": "complete", "agent_run_id": run_id})
                     cognitive_state_service.set_state(CognitiveState.IDLE, reason="agent_run_complete")
                     yield {"type": "done", "conversation_id": conversation_id, "message": content, "message_id": assistant["id"], "context": evidence, "actions": actions, "agent_run_id": run_id, "agent_status": "completed", "memory_candidates": candidates}
                     return
                 messages.append(model_message)
                 for name, arguments in calls:
-                    outcome = self.executor.request(name, arguments, conversation_id, run_id)
+                    outcome = await self.executor.request_async(name, arguments, conversation_id, run_id)
                     actions.append(outcome)
                     self._record_network_evidence(name, outcome, evidence, conversation_id)
                     agent_run_service.step(run_id, step_count, "tool", outcome["status"], tool_name=name, input_data=arguments, result=outcome)
@@ -202,23 +219,22 @@ class AgentController:
                     if outcome["status"] == "pending_confirmation":
                         evidence.update({"actions": actions, "agent_run_id": run_id, "agent_steps": step_count})
                         agent_run_service.update(run_id, status="waiting_confirmation", messages=messages, step_count=step_count, context=evidence)
-                        pending_content = (emitted_content + content).strip()
-                        if not pending_content:
-                            pending_content = f"Preparei a ação {name}. Confirme para continuar exatamente este fluxo."
-                            yield {"type": "token", "content": pending_content}
+                        pending_content = f"Preparei a ação {name}. Confirme para continuar exatamente este fluxo."
+                        delivered_content = pending_content
+                        yield {"type": "token", "content": pending_content}
                         assistant = repository.add_message(conversation_id, "assistant", pending_content, evidence)
-                        candidates = self._post_turn(conversation_id, user_message)
-                        yield {"type": "done", "conversation_id": conversation_id, "message": pending_content, "message_id": assistant["id"], "context": evidence, "actions": actions, "agent_run_id": run_id, "agent_status": "waiting_confirmation", "memory_candidates": candidates}
+                        yield {"type": "done", "conversation_id": conversation_id, "message": pending_content, "message_id": assistant["id"], "context": evidence, "actions": actions, "agent_run_id": run_id, "agent_status": "waiting_confirmation", "memory_candidates": []}
                         return
                     tool_message = self._tool_message(name, outcome)
                     messages.append(tool_message)
                     repository.add_message(conversation_id, "tool", tool_message["content"], {"actions": [outcome], "agent_run_id": run_id})
-                emitted_content += content
             result = self._max_loop(run_id, conversation_id, messages, evidence, actions, step_count)
             yield {"type": "token", "content": result["message"]}
             yield {"type": "done", **result}
         except asyncio.CancelledError:
             agent_run_service.update(run_id, status="cancelled", messages=messages, step_count=step_count, context=evidence)
+            if delivered_content:
+                repository.add_message(conversation_id, "assistant", delivered_content, {**evidence, "cancelled": True}, generation_status="cancelled")
             cognitive_state_service.emit(CognitiveEventType.GENERATION_FINISHED, {"status": "cancelled", "agent_run_id": run_id})
             cognitive_state_service.set_state(CognitiveState.IDLE, reason="generation_cancelled")
             raise
@@ -236,7 +252,7 @@ class AgentController:
         run = agent_run_service.get(run_id) if run_id else None
         if run_id and (not run or run["status"] != "waiting_confirmation"):
             raise ValueError("O fluxo associado não está aguardando confirmação.")
-        result = self.executor.confirm(action_id, approved)
+        result = await self.executor.confirm_async(action_id, approved)
         conversation_id = action["conversation_id"]
         tool_message = self._tool_message(action["tool"], result)
         repository.add_message(conversation_id, "tool", tool_message["content"], {"actions": [result], "agent_run_id": run_id})

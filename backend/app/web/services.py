@@ -6,6 +6,8 @@ import uuid
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+from datetime import timedelta
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import quote_plus, urljoin, urlparse
@@ -167,6 +169,8 @@ class WebSearchService:
         raw = self.provider.search(clean, max_results * 2, recency_days, domains)
         seen: set[str] = set()
         sources: list[dict[str, Any]] = []
+        dated = 0
+        cutoff = datetime.now(timezone.utc) - timedelta(days=recency_days) if recency_days else None
         for result in raw:
             url = result.get("url", "").strip()
             parsed = urlparse(url)
@@ -175,11 +179,27 @@ class WebSearchService:
                 continue
             if domains and not any(parsed.hostname == domain or parsed.hostname.endswith("." + domain) for domain in domains):
                 continue
+            published = result.get("published_at")
+            published_dt = None
+            if published:
+                try:
+                    try:
+                        published_dt = datetime.fromisoformat(str(published).replace("Z", "+00:00"))
+                    except ValueError:
+                        published_dt = parsedate_to_datetime(str(published))
+                    if published_dt.tzinfo is None:
+                        published_dt = published_dt.replace(tzinfo=timezone.utc)
+                except (TypeError, ValueError, OverflowError):
+                    published_dt = None
+            if cutoff and published_dt and published_dt < cutoff:
+                continue
             seen.add(canonical)
-            sources.append({"source_id": str(uuid.uuid4()), "title": result.get("title") or parsed.hostname, "url": url, "domain": parsed.hostname, "published_at": result.get("published_at"), "retrieved_at": _now(), "excerpt": result.get("excerpt", "")[:600]})
+            sources.append({"source_id": str(uuid.uuid4()), "title": result.get("title") or parsed.hostname, "url": url, "domain": parsed.hostname, "published_at": published_dt.isoformat() if published_dt else None, "retrieved_at": _now(), "excerpt": result.get("excerpt", "")[:600]})
+            dated += int(published_dt is not None)
             if len(sources) >= max_results:
                 break
-        return {"query": clean, "redactions": redactions, "sources": sources, "count": len(sources), "network_activity": "WEB SEARCH"}
+        recency_status = "not_requested" if not recency_days else "guaranteed" if sources and dated >= len(sources) else "partial" if dated else "unverified"
+        return {"query": clean, "redactions": redactions, "sources": sources, "count": len(sources), "recency_days": recency_days, "recency_status": recency_status, "recency_guarantee": recency_status == "guaranteed", "network_activity": "WEB SEARCH"}
 
 
 class WebIntelligenceService:

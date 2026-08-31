@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     voice_resource_mode: str = "AUTO"
     browser_worker_url: str = "http://127.0.0.1:8767"
     browser_profile_path: Path = Path("data/browser/profiles/jarvis")
+    browser_worker_token: str = ""
+    browser_candidate_ttl_seconds: int = 900
     max_recent_messages: int = 16
     max_memory_items: int = 6
     max_document_chunks: int = 5

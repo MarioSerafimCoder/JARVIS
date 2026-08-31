@@ -33,6 +33,19 @@ class MemoryService:
 
     def __init__(self, embeddings: EmbeddingProvider | None = None) -> None:
         self.embeddings = embeddings or embedding_provider
+        self._embedding_index: dict[str, list[float]] = {}
+        self._embedding_index_version: tuple[int, str] | None = None
+
+    def _load_embedding_index(self) -> dict[str, list[float]]:
+        marker = repository.row("SELECT COUNT(*) AS count,COALESCE(MAX(updated_at),'') AS updated_at FROM memory_embeddings") or {}
+        version = (int(marker.get("count", 0)), str(marker.get("updated_at", "")))
+        if version != self._embedding_index_version:
+            self._embedding_index = {
+                row["memory_id"]: json.loads(row["vector_json"])
+                for row in repository.rows("SELECT memory_id,vector_json FROM memory_embeddings")
+            }
+            self._embedding_index_version = version
+        return self._embedding_index
 
     def list(self, query: str | None = None, status: str | None = "active") -> list[dict[str, Any]]:
         clauses, parameters = [], []
@@ -50,14 +63,24 @@ class MemoryService:
 
     def classify_existing(self, content: str, exclude_id: str | None = None) -> dict[str, Any]:
         items = repository.rows("SELECT id,content,status FROM memories WHERE status IN ('active','superseded')")
-        scored = [(item, _text_similarity(content, item["content"])) for item in items if item["id"] != exclude_id]
-        if not scored:
-            return {"kind": "new", "score": 0.0}
-        item, score = max(scored, key=lambda pair: pair[1])
+        items = [item for item in items if item["id"] != exclude_id]
+        if not items:
+            return {"kind": "new", "score": 0.0, "method": "lexical_fallback"}
+        semantic: dict[str, float] = {}
+        try:
+            candidate_vector = self.embeddings.embed([content])[0]
+            semantic = {memory_id: max(0.0, cosine_similarity(candidate_vector, vector)) for memory_id, vector in self._load_embedding_index().items()}
+        except Exception:
+            pass
+        scored = [
+            (item, max(_text_similarity(content, item["content"]), semantic.get(item["id"], 0.0)), semantic.get(item["id"], 0.0))
+            for item in items
+        ]
+        item, score, semantic_score = max(scored, key=lambda pair: pair[1])
         normalized_new, normalized_old = content.casefold(), item["content"].casefold()
         conflict = score >= 0.48 and any(word in normalized_new for word in ("agora", "não ", "deixei", "mudou", "prefiro")) and normalized_new != normalized_old
         kind = "duplicate" if score >= 0.90 else "conflict" if conflict else "similar" if score >= 0.58 else "new"
-        return {"kind": kind, "score": round(score, 4), "memory": item}
+        return {"kind": kind, "score": round(score, 4), "semantic_score": round(semantic_score, 4), "memory": item, "method": "hybrid" if semantic else "lexical_fallback"}
 
     def create(self, payload: MemoryInput, *, allow_duplicate: bool = False) -> dict[str, Any]:
         match = self.classify_existing(payload.content)
@@ -172,6 +195,7 @@ class MemoryService:
             "INSERT OR REPLACE INTO memory_embeddings VALUES (?,?,?,?,?,?)",
             (memory_id, self.embeddings.name, self.embeddings.model_name, len(vector), json.dumps(vector), utc_now()),
         )
+        self._embedding_index_version = None
 
     @staticmethod
     def _invalidate_relationships(connection, memory_id: str) -> None:
@@ -232,7 +256,7 @@ class TaskService:
         changes = payload.model_dump(exclude_none=True)
         if not changes:
             raise ValueError("Nenhuma alteração válida informada.")
-        completed_at = utc_now() if changes.get("status") == "done" else current.get("completed_at")
+        completed_at = utc_now() if changes.get("status") == "done" else None if "status" in changes else current.get("completed_at")
         changes.update({"updated_at": utc_now(), "completed_at": completed_at})
         assignments = ",".join(f"{key}=?" for key in changes)
         repository.execute(f"UPDATE tasks SET {assignments} WHERE id=?", tuple(changes.values()) + (task_id,))

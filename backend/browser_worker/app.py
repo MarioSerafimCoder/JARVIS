@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import asyncio
+import base64
+import os
 import re
+import secrets
+from decimal import Decimal, InvalidOperation
+from functools import wraps
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote_plus, urlparse
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, HTTPException, Request
+from pydantic import BaseModel, ConfigDict, Field
 
 try:
     from playwright.async_api import BrowserContext, Page, async_playwright
@@ -18,6 +24,16 @@ except ImportError:  # Worker stays diagnosable before optional setup.
 ALLOWED_HOSTS = {"amazon.com.br", "www.amazon.com.br", "amazon.com", "www.amazon.com"}
 CAPABILITIES = ["search_products", "read_product", "read_cart", "add_to_cart", "remove_from_cart", "change_quantity"]
 runtime = {"playwright": None, "context": None, "page": None, "site": None}
+action_lock = asyncio.Lock()
+BROWSER_WORKER_TOKEN = os.environ.get("BROWSER_WORKER_TOKEN", "")
+PROFILE_ROOT = Path(os.environ.get("BROWSER_PROFILE_PATH") or (Path(__file__).resolve().parents[2] / "data" / "browser" / "profiles" / "jarvis")).resolve()
+
+
+def valid_worker_token(token: str) -> bool:
+    try:
+        return len(base64.b64decode(token, validate=True)) == 32
+    except (ValueError, base64.binascii.Error):
+        return False
 
 
 def allowed_url(url: str) -> str:
@@ -27,11 +43,26 @@ def allowed_url(url: str) -> str:
     return url
 
 
-def price_key(value: str | None) -> str:
-    if not value:
-        return ""
-    digits = re.sub(r"[^0-9]", "", value)
-    return digits.lstrip("0") or "0"
+def money_amount(value) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, dict):
+        value = value.get("amount")
+    raw = re.sub(r"[^0-9,.-]", "", str(value))
+    if "," in raw:
+        raw = raw.replace(".", "").replace(",", ".")
+    try:
+        return Decimal(raw).quantize(Decimal("0.01"))
+    except InvalidOperation:
+        return None
+
+
+def serialized(function):
+    @wraps(function)
+    async def wrapper(*args, **kwargs):
+        async with action_lock:
+            return await function(*args, **kwargs)
+    return wrapper
 
 
 async def text(page: Page, selectors: list[str], default: str | None = None) -> str | None:
@@ -59,7 +90,21 @@ async def auth_state(page: Page) -> dict:
     captcha = any(term in body for term in ("digite os caracteres", "enter the characters you see", "captcha"))
     account = (await text(page, ["#nav-link-accountList-nav-line-1"], "") or "").lower()
     authenticated = bool(account and not any(term in account for term in ("faça seu login", "sign in")))
-    return {"authenticated": authenticated, "captcha_required": captcha, "status": "captcha_required" if captcha else "connected" if authenticated else "manual_login_required", "capabilities": CAPABILITIES if authenticated else ["search_products", "read_product"]}
+    return {"authenticated": authenticated, "captcha_required": captcha, "status": "CAPTCHA_REQUIRED" if captcha else "SUCCESS" if authenticated else "AUTH_REQUIRED", "capabilities": CAPABILITIES if authenticated else ["search_products", "read_product"]}
+
+
+async def preflight(*, require_auth: bool = False) -> tuple[Page | None, dict | None]:
+    try:
+        page = await active_page()
+        allowed_url(page.url)
+    except (HTTPException, ValueError):
+        return None, {"status": "FAILED", "verified": False}
+    state = await auth_state(page)
+    if state["captcha_required"]:
+        return None, {"status": "CAPTCHA_REQUIRED", "verified": False}
+    if require_auth and not state["authenticated"]:
+        return None, {"status": "AUTH_REQUIRED", "verified": False}
+    return page, None
 
 
 @asynccontextmanager
@@ -76,9 +121,21 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="Jarvis Browser Worker", version="0.1.0", lifespan=lifespan)
 
 
+@app.middleware("http")
+async def authenticate(request: Request, call_next):
+    host = request.client.host if request.client else ""
+    if host not in {"127.0.0.1", "::1", "testclient"}:
+        return __import__("starlette.responses", fromlist=["JSONResponse"]).JSONResponse({"detail": "Acesso local obrigatório."}, status_code=403)
+    supplied = request.headers.get("authorization", "")
+    expected = f"Bearer {BROWSER_WORKER_TOKEN}" if valid_worker_token(BROWSER_WORKER_TOKEN) else ""
+    if not expected or not secrets.compare_digest(supplied, expected):
+        return __import__("starlette.responses", fromlist=["JSONResponse"]).JSONResponse({"detail": "Não autorizado."}, status_code=401)
+    return await call_next(request)
+
+
 class ConnectInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     site: str = Field(pattern="^amazon$")
-    profile_path: str
 
 
 class SearchInput(BaseModel):
@@ -92,7 +149,8 @@ class ProductInput(BaseModel):
 
 
 class AddInput(ProductInput):
-    expected_price: str | None = None
+    asin: str | None = None
+    expected_price: dict[str, str] | None = None
     variant: str | None = None
     quantity: int = Field(default=1, ge=1, le=10)
 
@@ -111,15 +169,16 @@ async def health() -> dict:
 
 
 @app.post("/sessions/connect")
+@serialized
 async def connect(payload: ConnectInput) -> dict:
     if async_playwright is None:
         raise HTTPException(503, "Playwright não instalado. Execute setup-browser.ps1.")
-    Path(payload.profile_path).mkdir(parents=True, exist_ok=True)
+    PROFILE_ROOT.mkdir(parents=True, exist_ok=True)
     if runtime.get("context") is None:
         runtime["playwright"] = await async_playwright().start()
         try:
             runtime["context"] = await runtime["playwright"].chromium.launch_persistent_context(
-                payload.profile_path,
+                str(PROFILE_ROOT),
                 channel="msedge",
                 headless=False,
                 accept_downloads=False,
@@ -140,6 +199,7 @@ async def connect(payload: ConnectInput) -> dict:
 
 
 @app.get("/sessions/{site}/status")
+@serialized
 async def session_status(site: str) -> dict:
     if site != "amazon":
         raise HTTPException(404, "Site não suportado.")
@@ -150,6 +210,7 @@ async def session_status(site: str) -> dict:
 
 
 @app.post("/sessions/{site}/disconnect")
+@serialized
 async def disconnect(site: str) -> dict:
     context = runtime.get("context")
     if context:
@@ -162,11 +223,12 @@ async def disconnect(site: str) -> dict:
 
 
 @app.post("/amazon/search")
+@serialized
 async def search_products(payload: SearchInput) -> dict:
     page = await active_page()
     await page.goto(f"https://www.amazon.com.br/s?k={quote_plus(payload.query)}", wait_until="domcontentloaded", timeout=30000)
     if (await auth_state(page))["captcha_required"]:
-        return {"status": "captcha_required", "items": []}
+        return {"status": "CAPTCHA_REQUIRED", "items": []}
     cards = page.locator('[data-component-type="s-search-result"]')
     items = []
     for index in range(min(await cards.count(), payload.max_results * 2)):
@@ -178,7 +240,9 @@ async def search_products(payload: SearchInput) -> dict:
                 continue
             url = href if href.startswith("http") else "https://www.amazon.com.br" + href.split("?", 1)[0]
             allowed_url(url)
+            asin = await card.get_attribute("data-asin")
             item = {
+                "asin": asin or None,
                 "title": title,
                 "price": await text(card, [".a-price .a-offscreen"]),
                 "rating": await text(card, [".a-icon-alt"]),
@@ -188,7 +252,7 @@ async def search_products(payload: SearchInput) -> dict:
                 "availability": "available",
                 "seller": None,
                 "variant": None,
-                "url": url,
+                "url": url, "canonical_url": f"https://www.amazon.com.br/dp/{asin}" if asin else url.split("?", 1)[0],
             }
             items.append(item)
             if len(items) >= payload.max_results:
@@ -199,42 +263,48 @@ async def search_products(payload: SearchInput) -> dict:
 
 
 @app.post("/amazon/product")
+@serialized
 async def read_product(payload: ProductInput) -> dict:
     page = await active_page()
     await page.goto(allowed_url(payload.url), wait_until="domcontentloaded", timeout=30000)
     state = await auth_state(page)
-    return {"status": state["status"] if state["captcha_required"] else "success", "candidate_id": payload.candidate_id, "title": await text(page, ["#productTitle", "h1"]), "price": await text(page, ["#corePrice_feature_div .a-offscreen", ".a-price .a-offscreen"]), "seller": await text(page, ["#sellerProfileTriggerId", "#merchant-info"]), "availability": await text(page, ["#availability"]), "url": page.url, "verified": not state["captcha_required"]}
+    return {"status": state["status"] if state["captcha_required"] else "SUCCESS", "candidate_id": payload.candidate_id, "title": await text(page, ["#productTitle", "h1"]), "price": await text(page, ["#corePrice_feature_div .a-offscreen", ".a-price .a-offscreen"]), "seller": await text(page, ["#sellerProfileTriggerId", "#merchant-info"]), "availability": await text(page, ["#availability"]), "url": page.url, "verified": not state["captcha_required"]}
 
 
 async def cart_snapshot(page: Page) -> dict:
     await page.goto("https://www.amazon.com.br/gp/cart/view.html", wait_until="domcontentloaded", timeout=30000)
     state = await auth_state(page)
     if state["captcha_required"]:
-        return {"status": "captcha_required", "items": [], "verified": False}
+        return {"status": "CAPTCHA_REQUIRED", "items": [], "verified": False}
+    if not state["authenticated"]:
+        return {"status": "AUTH_REQUIRED", "items": [], "verified": False}
     rows = page.locator(".sc-list-item[data-asin]")
     items = []
     for index in range(await rows.count()):
         row = rows.nth(index)
         asin = await row.get_attribute("data-asin") or f"row-{index}"
         items.append({"item_id": asin, "title": await text(row, [".sc-product-title", ".a-truncate-full"]), "price": await text(row, [".sc-product-price", ".a-price .a-offscreen"]), "quantity": await row.locator("select.sc-update-quantity-select").input_value() if await row.locator("select.sc-update-quantity-select").count() else "1"})
-    return {"status": "success", "items": items, "verified": True}
+    return {"status": "SUCCESS", "items": items, "verified": True}
 
 
 @app.get("/amazon/cart")
+@serialized
 async def read_cart() -> dict:
-    return await cart_snapshot(await active_page())
+    page = await active_page()
+    return await cart_snapshot(page)
 
 
 @app.post("/amazon/cart/add")
+@serialized
 async def add_to_cart(payload: AddInput) -> dict:
     page = await active_page()
     await page.goto(allowed_url(payload.url), wait_until="domcontentloaded", timeout=30000)
-    state = await auth_state(page)
-    if state["captcha_required"]:
-        return {"status": "captcha_required", "verified": False}
+    page, blocked = await preflight(require_auth=True)
+    if blocked or page is None:
+        return blocked or {"status": "FAILED", "verified": False}
     title_now = await text(page, ["#productTitle", "h1"])
     price_now = await text(page, ["#corePrice_feature_div .a-offscreen", ".a-price .a-offscreen"])
-    if payload.expected_price and price_key(price_now) != price_key(payload.expected_price):
+    if payload.expected_price and money_amount(price_now) != money_amount(payload.expected_price):
         return {"status": "PRICE_CHANGED", "expected_price": payload.expected_price, "current_price": price_now, "candidate_id": payload.candidate_id, "verified": False}
     if payload.variant:
         variant = page.get_by_text(payload.variant, exact=True).first
@@ -247,21 +317,29 @@ async def add_to_cart(payload: AddInput) -> dict:
     await button.click(timeout=5000)
     await page.wait_for_timeout(1200)
     cart = await cart_snapshot(page)
-    matching = [item for item in cart.get("items", []) if title_now and item.get("title") and title_now.lower()[:60] in item["title"].lower()]
+    matching = [item for item in cart.get("items", []) if payload.asin and item.get("item_id") == payload.asin]
+    verification_method = "asin"
+    if not matching and not payload.asin:
+        matching = [item for item in cart.get("items", []) if title_now and item.get("title") and title_now.lower()[:60] in item["title"].lower()]
+        verification_method = "title_low_confidence"
     if not matching:
         return {"status": "UNKNOWN", "reason": "Não foi possível verificar o produto no carrinho.", "verified": False, "cart": cart}
     item = matching[0]
     if payload.quantity != 1:
-        changed = await change_quantity(QuantityInput(item_id=item["item_id"], quantity=payload.quantity))
+        changed = await change_quantity.__wrapped__(QuantityInput(item_id=item["item_id"], quantity=payload.quantity))
         if not changed.get("verified"):
             return changed
-    return {"status": "success", "candidate_id": payload.candidate_id, "title": title_now, "price": price_now, "variant": payload.variant, "quantity": payload.quantity, "cart_item_id": item["item_id"], "verified": True}
+    return {"status": "SUCCESS", "candidate_id": payload.candidate_id, "title": title_now, "price": price_now, "variant": payload.variant, "quantity": payload.quantity, "cart_item_id": item["item_id"], "verification_method": verification_method, "verified": True}
 
 
 @app.post("/amazon/cart/remove")
+@serialized
 async def remove_from_cart(payload: ItemInput) -> dict:
     page = await active_page()
     await page.goto("https://www.amazon.com.br/gp/cart/view.html", wait_until="domcontentloaded", timeout=30000)
+    page, blocked = await preflight(require_auth=True)
+    if blocked or page is None:
+        return blocked or {"status": "FAILED", "verified": False}
     row = page.locator(f'.sc-list-item[data-asin="{payload.item_id}"]').first
     if not await row.count():
         return {"status": "UNKNOWN", "verified": False}
@@ -271,14 +349,18 @@ async def remove_from_cart(payload: ItemInput) -> dict:
     await delete.click(timeout=4000)
     await page.wait_for_timeout(800)
     verified = not await page.locator(f'.sc-list-item[data-asin="{payload.item_id}"]').count()
-    return {"status": "success" if verified else "UNKNOWN", "item_id": payload.item_id, "verified": verified}
+    return {"status": "SUCCESS" if verified else "UNKNOWN", "item_id": payload.item_id, "verified": verified}
 
 
 @app.post("/amazon/cart/quantity")
+@serialized
 async def change_quantity(payload: QuantityInput) -> dict:
     page = await active_page()
     if "/cart" not in page.url:
         await page.goto("https://www.amazon.com.br/gp/cart/view.html", wait_until="domcontentloaded", timeout=30000)
+    page, blocked = await preflight(require_auth=True)
+    if blocked or page is None:
+        return blocked or {"status": "FAILED", "verified": False}
     row = page.locator(f'.sc-list-item[data-asin="{payload.item_id}"]').first
     select = row.locator("select.sc-update-quantity-select").first
     if not await select.count():
@@ -286,5 +368,4 @@ async def change_quantity(payload: QuantityInput) -> dict:
     await select.select_option(str(payload.quantity))
     await page.wait_for_timeout(900)
     actual = await select.input_value()
-    return {"status": "success" if actual == str(payload.quantity) else "UNKNOWN", "item_id": payload.item_id, "quantity": int(actual), "verified": actual == str(payload.quantity)}
-
+    return {"status": "SUCCESS" if actual == str(payload.quantity) else "UNKNOWN", "item_id": payload.item_id, "quantity": int(actual), "verified": actual == str(payload.quantity)}

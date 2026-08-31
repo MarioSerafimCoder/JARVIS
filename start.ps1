@@ -6,6 +6,10 @@ $backendRoot = Join-Path $projectRoot 'backend'
 $frontendRoot = Join-Path $projectRoot 'frontend'
 $pythonExe = Join-Path $backendRoot '.venv\Scripts\python.exe'
 $ollamaExe = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe'
+$browserTokenBytes = New-Object byte[] 32
+[Security.Cryptography.RandomNumberGenerator]::Fill($browserTokenBytes)
+$env:BROWSER_WORKER_TOKEN = [Convert]::ToBase64String($browserTokenBytes)
+$env:BROWSER_PROFILE_PATH = Join-Path $projectRoot 'data\browser\profiles\jarvis'
 
 if (-not (Test-Path -LiteralPath $pythonExe)) {
   throw 'Ambiente Python não encontrado. Execute a instalação descrita no README.'

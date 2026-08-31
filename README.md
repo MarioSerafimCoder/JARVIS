@@ -1,5 +1,9 @@
 # Jarvis Local
 
+## Fase 3.1 — Hardening
+
+O Browser Worker agora usa autenticação interna efêmera, candidatos Amazon expiram e usam ASIN/dinheiro estruturado, a voz possui fila FIFO com acknowledgements reais de playback, e o Agent loop não expõe texto intermediário. Contexto, memória, SQLite, persona versionada, providers globais, CI e cobertura também foram endurecidos. Consulte [o relatório da Fase 3.1](docs/HARDENING_REPORT.md) e [os benchmarks](docs/benchmarks/FASE_3_1.md).
+
 ## Web Intelligence e Browser Agent
 
 O Jarvis pode pesquisar e ler a web pública com fontes, além de controlar um perfil dedicado do Microsoft Edge por ações semânticas. O modo offline continua funcionando; Web Access começa em **ASK** e Browser Access em **OFF**.

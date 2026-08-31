@@ -14,10 +14,10 @@ from app.tools.base import RiskLevel, Tool
 
 
 class FunctionTool(Tool):
-    def __init__(self, name: str, description: str, schema: dict[str, Any], risk: RiskLevel, function, input_model: type[BaseModel] | None = None, risk_resolver=None, blocked_message: str | None = None):
+    def __init__(self, name: str, description: str, schema: dict[str, Any], risk: RiskLevel, function, input_model: type[BaseModel] | None = None, risk_resolver=None, blocked_message: str | None = None, async_function=None):
         self.name, self.description, self.input_schema, self.risk_level = name, description, schema, risk
         self.function, self.input_model = function, input_model
-        self.risk_resolver, self.blocked_message = risk_resolver, blocked_message
+        self.risk_resolver, self.blocked_message, self.async_function = risk_resolver, blocked_message, async_function
 
     def risk_for(self, payload: dict[str, Any]) -> RiskLevel:
         return self.risk_resolver(payload) if self.risk_resolver else self.risk_level
@@ -29,6 +29,13 @@ class FunctionTool(Tool):
         if self.input_model:
             payload = self.input_model.model_validate(payload).model_dump(exclude_none=True)
         return self.function(payload)
+
+    async def execute_async(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if self.input_model:
+            payload = self.input_model.model_validate(payload).model_dump(exclude_none=True)
+        if self.async_function:
+            return await self.async_function(payload)
+        return await __import__("asyncio").to_thread(self.function, payload)
 
 
 def _get_current_datetime(_: dict) -> dict:

@@ -1,5 +1,9 @@
 # Relatório de consolidação do cérebro local
 
+## Atualização — Fase 3.1 Hardening (30/08/2026)
+
+Os contratos de segurança, voz, agent loop, contexto, memória, banco e interface foram endurecidos sem adicionar checkout ou integrações. A validação atual substitui contagens históricas: **71 testes backend**, **19 frontend**, **67,25% de cobertura** (baseline CI 65%), Ruff e build Vite/TypeScript aprovados. O smoke real confirmou health HTTP 200, Ollama/modelo disponíveis e resposta aquecida em 0,620 s. Browser e Voice Workers estavam desligados no smoke; testes determinísticos passaram, enquanto login Amazon e microfone físico continuam manuais. Detalhes em `HARDENING_REPORT.md`.
+
 ## Web Intelligence e Browser Agent — 30/08/2026
 
 Implementados dois caminhos estritamente separados: pesquisa/leitura pública com evidências e automação de site via adapter semântico. O banco foi migrado para versão 6 com fontes, metadados de sessão/site e candidatos de produto. O frontend ganhou modos de acesso, conexão Amazon, fontes por resposta e contexto WEB/BROWSER.

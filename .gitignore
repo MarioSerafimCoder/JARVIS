@@ -10,6 +10,8 @@ frontend/vite.config.js
 frontend/vite.config.d.ts
 __pycache__/
 .pytest_cache/
+.ruff_cache/
+.coverage
 *.py[cod]
 data/
 backend/data/

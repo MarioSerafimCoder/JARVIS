@@ -34,3 +34,23 @@ async def test_confirmed_action_gets_model_follow_up(isolated_data):
     assert repository.row("SELECT * FROM tasks WHERE title='Revisar projeto'")
     assert "Resultado verificado" in provider.requests[-1][-1]["content"]
 
+
+@pytest.mark.asyncio
+async def test_stream_never_exposes_intermediate_tool_turn_text(isolated_data):
+    class ToolTurnLLM(FakeLLM):
+        def __init__(self):
+            super().__init__(); self.turn = 0
+
+        async def stream_chat(self, messages, tools=None):
+            self.turn += 1
+            if self.turn == 1:
+                yield {"message": {"role": "assistant", "content": "Texto interno que não pode aparecer."}}
+                yield {"message": {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "get_current_datetime", "arguments": {}}}]}}
+            else:
+                yield {"message": {"role": "assistant", "content": "Resposta final."}}
+
+    registry = ToolRegistry(initial_tools())
+    events = [event async for event in AgentController(ToolTurnLLM(), registry, ToolExecutor(registry), isolated_data).stream("Que horas são?")]
+    visible = "".join(event.get("content", "") for event in events if event["type"] == "token")
+    assert visible == "Resposta final."
+    assert "Texto interno" not in visible

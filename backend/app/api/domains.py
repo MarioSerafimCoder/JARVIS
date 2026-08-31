@@ -11,7 +11,7 @@ from app.container import browser_agent, provider, settings, tool_registry, voic
 from app.core.cognitive_graph import cognitive_graph_service
 from app.core.config import PROJECT_ROOT, RUNTIME_ROOT
 from app.core.database import database, utc_now
-from app.core.persona import load_persona, save_persona
+from app.core.persona import compare_persona, keep_persona, load_persona, persona_status, save_persona, update_to_default
 from app.core.security import safe_child_path, validate_upload
 from app.services.agent_runs import agent_run_service
 from app.services.domains import conversation_service, knowledge_service, memory_service, task_service
@@ -268,7 +268,7 @@ def agent_run(run_id: str) -> dict:
 
 @router.get("/persona")
 def persona() -> dict:
-    return {"content": load_persona()}
+    return {"content": load_persona(), **persona_status()}
 
 
 @router.put("/persona")
@@ -278,6 +278,21 @@ def update_persona(payload: PersonaInput) -> dict:
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     return {"saved": True, "content": load_persona()}
+
+
+@router.get("/persona/compare")
+def persona_compare() -> dict:
+    return compare_persona()
+
+
+@router.post("/persona/update-default")
+def persona_update_default() -> dict:
+    return update_to_default()
+
+
+@router.post("/persona/keep")
+def persona_keep() -> dict:
+    return keep_persona()
 
 
 @router.post("/persona/preview")

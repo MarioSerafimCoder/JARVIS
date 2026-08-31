@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from enum import StrEnum
 from typing import Any
+import asyncio
 
 
 class RiskLevel(StrEnum):
@@ -24,6 +25,9 @@ class Tool(ABC):
 
     @abstractmethod
     def execute(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+
+    async def execute_async(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await asyncio.to_thread(self.execute, payload)
 
     def ollama_schema(self) -> dict[str, Any]:
         return {

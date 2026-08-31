@@ -55,6 +55,20 @@ def test_search_normalizes_deduplicates_and_keeps_provenance():
     assert all({"source_id", "title", "url", "domain", "retrieved_at", "excerpt"} <= set(source) for source in result["sources"])
 
 
+def test_recency_filters_dated_results_and_reports_real_guarantee():
+    class DatedProvider(WebSearchProvider):
+        def search(self, query, max_results, recency_days=None, domains=None):
+            return [
+                {"title": "Antiga", "url": "https://example.com/old", "published_at": "2020-01-01"},
+                {"title": "Atual", "url": "https://example.com/new", "published_at": "2026-08-30"},
+            ]
+
+    result = WebSearchService(DatedProvider()).search("atual", max_results=5, recency_days=2)
+    assert [source["title"] for source in result["sources"]] == ["Atual"]
+    assert result["recency_status"] == "guaranteed"
+    assert result["recency_guarantee"] is True
+
+
 def test_web_access_off_ask_on_policy():
     service = WebIntelligenceService(WebSearchService(FakeSearchProvider()))
     executor = ToolExecutor(ToolRegistry(web_tools(service)))

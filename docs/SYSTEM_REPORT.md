@@ -1,5 +1,9 @@
 # Relatório do sistema
 
+## Atualização Fase 3.1 — 30/08/2026
+
+Hardening validado com 71 testes backend, 67,25% de cobertura (baseline CI 65%), 19 testes frontend, Ruff e build TypeScript/Vite. O smoke real encontrou Ollama e `qwen3.5:4b` disponíveis; uma resposta aquecida “OK” completou em 0,620 s. Voice Worker e Browser Worker estavam desligados e foram reportados como indisponíveis, sem comprometer chat e interface. Consulte `HARDENING_REPORT.md` e `benchmarks/FASE_3_1.md`.
+
 Levantamento realizado em 29/08/2026 antes da criação do projeto. Os valores abaixo foram detectados no computador; não são estimativas de catálogo.
 
 ## Hardware
@@ -50,4 +54,3 @@ O primeiro teste usou o modo de raciocínio padrão do modelo e gerou 4.603 toke
 ## Adequação
 
 O hardware é adequado para Qwen 3.5 4B Q4_K_M. O modelo ocupou menos da metade da VRAM disponível e a geração efetiva atingiu 70,41 tokens/s. Modelos substancialmente maiores podem exigir offload parcial para RAM e devem ser avaliados separadamente.
-

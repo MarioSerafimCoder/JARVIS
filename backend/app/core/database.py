@@ -17,7 +17,9 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     connection = sqlite3.connect(db_path, check_same_thread=False)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA busy_timeout = 5000")
     connection.execute("PRAGMA journal_mode = WAL")
+    connection.execute("PRAGMA synchronous = NORMAL")
     return connection
 
 
@@ -74,7 +76,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS document_chunks_fts USING fts5(
 );
 CREATE TABLE IF NOT EXISTS pending_actions (
   id TEXT PRIMARY KEY, tool TEXT NOT NULL, input_json TEXT NOT NULL, status TEXT NOT NULL,
-  conversation_id TEXT, created_at TEXT NOT NULL, resolved_at TEXT, executed_at TEXT
+  conversation_id TEXT, created_at TEXT NOT NULL, resolved_at TEXT, executed_at TEXT,
+  agent_run_id TEXT, display_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE TABLE IF NOT EXISTS activity_log (
   id TEXT PRIMARY KEY, timestamp TEXT NOT NULL, tool TEXT NOT NULL, input_json TEXT NOT NULL,
@@ -110,11 +113,17 @@ CREATE TABLE IF NOT EXISTS memory_candidates (
   confidence REAL NOT NULL, importance INTEGER NOT NULL, source_type TEXT NOT NULL,
   source_reference TEXT, source_message_id TEXT, status TEXT NOT NULL DEFAULT 'candidate',
   dedupe_status TEXT NOT NULL DEFAULT 'new', related_memory_id TEXT,
-  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, reason TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS conversation_summaries (
   conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
   summary TEXT NOT NULL, message_count INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS conversation_states (
+  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+  state_json TEXT NOT NULL, rendered_text TEXT NOT NULL,
+  source_message_count INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS message_feedback (
   id TEXT PRIMARY KEY, message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
@@ -180,50 +189,11 @@ CREATE TABLE IF NOT EXISTS product_candidates (
 
 
 def initialize_database(path: Path | None = None) -> None:
+    from app.migrations import run_migrations
+
     with database(path) as connection:
         connection.executescript(SCHEMA)
-        migration_4_needed = connection.execute("SELECT 1 FROM schema_version WHERE version=4").fetchone() is None
-        _add_column(connection, "messages", "generation_status", "TEXT NOT NULL DEFAULT 'complete'")
-        _add_column(connection, "pending_actions", "executed_at", "TEXT")
-        _add_column(connection, "pending_actions", "agent_run_id", "TEXT")
-        _add_column(connection, "memories", "memory_type", "TEXT NOT NULL DEFAULT 'semantic'")
-        _add_column(connection, "memories", "status", "TEXT NOT NULL DEFAULT 'active'")
-        _add_column(connection, "memories", "confidence", "REAL NOT NULL DEFAULT 1.0")
-        _add_column(connection, "memories", "supersedes_id", "TEXT")
-        _add_column(connection, "memories", "source_message_id", "TEXT")
-        _add_column(connection, "documents", "use_for_rag", "INTEGER NOT NULL DEFAULT 1")
-        _add_column(connection, "documents", "collection", "TEXT")
-        connection.execute(
-            "INSERT OR IGNORE INTO schema_version VALUES (?,?,?)",
-            (1, utc_now(), "initial schema"),
-        )
-        connection.execute(
-            "INSERT OR IGNORE INTO schema_version VALUES (?,?,?)",
-            (2, utc_now(), "streaming status and action execution timestamp"),
-        )
-        connection.execute(
-            "INSERT OR IGNORE INTO schema_version VALUES (?,?,?)",
-            (3, utc_now(), "cognitive core memory relationships"),
-        )
-        connection.execute(
-            "INSERT OR IGNORE INTO schema_version VALUES (?,?,?)",
-            (4, utc_now(), "intelligence engine, memory 2.0, feedback and agent runs"),
-        )
-        connection.execute(
-            "INSERT OR IGNORE INTO schema_version VALUES (?,?,?)",
-            (5, utc_now(), "local voice engine profiles, settings and session metadata"),
-        )
-        connection.execute(
-            "INSERT OR IGNORE INTO schema_version VALUES (?,?,?)",
-            (6, utc_now(), "web intelligence evidence and isolated browser agent metadata"),
-        )
-        if migration_4_needed:
-            connection.execute(
-                "UPDATE memories SET memory_type=CASE category "
-                "WHEN 'preference' THEN 'preference' WHEN 'person' THEN 'person' WHEN 'project' THEN 'project' "
-                "WHEN 'decision' THEN 'decision' WHEN 'routine' THEN 'procedural' ELSE 'semantic' END "
-                "WHERE memory_type IS NULL OR memory_type='semantic'"
-            )
+        run_migrations(connection, _add_column, utc_now)
 
 
 def _add_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:

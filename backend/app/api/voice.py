@@ -175,6 +175,11 @@ async def voice_session(websocket: WebSocket) -> None:
             elif event_type == "interrupt" and session:
                 if current_task and not current_task.done(): current_task.cancel()
                 await outgoing.put(voice_session_manager.interrupt(session.session_id))
+            elif event_type in {"playback_started", "playback_finished", "playback_interrupted"} and session:
+                try:
+                    await outgoing.put(voice_session_manager.playback_event(session.session_id, str(payload.get("queue_id", "")), event_type))
+                except VoiceEngineError as exc:
+                    await outgoing.put({"type": "error", "error": {"code": exc.code, "message": str(exc)}})
             elif event_type in {"mute", "unmute"} and session:
                 updated = voice_session_manager.mute(session.session_id, event_type == "mute")
                 await outgoing.put({"type": event_type, "muted": updated.muted})
